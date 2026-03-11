@@ -1,0 +1,109 @@
+use std::io::{self, Write};
+use crate::executor::{execute, ExecuteResult};
+use crate::parser::parse;
+use crate::storage::Storage;
+
+/// Start the REPL — reads SQL from stdin, executes it, prints results.
+pub fn run() {
+    let mut storage = Storage::new();
+
+    println!("mukhidb v0.1.0  |  Type .exit to quit, .help for hints.");
+
+    loop {
+        print!("mukhidb> ");
+        io::stdout().flush().expect("Failed to flush stdout");
+
+        let mut input = String::new();
+        match io::stdin().read_line(&mut input) {
+            Ok(0) => break, // EOF (Ctrl-D)
+            Ok(_) => {}
+            Err(e) => {
+                eprintln!("Read error: {}", e);
+                break;
+            }
+        }
+
+        let input = input.trim();
+        if input.is_empty() { continue; }
+
+        // Meta-commands (start with '.')
+        if input.starts_with('.') {
+            handle_meta(input);
+            continue;
+        }
+
+        let statement = parse(input);
+        let result    = execute(statement, &mut storage);
+
+        match result {
+            ExecuteResult::Message(msg) => println!("{}", msg),
+            ExecuteResult::Rows { headers, rows } => print_table(headers, rows),
+        }
+    }
+
+    println!("\nBye!");
+}
+
+fn handle_meta(cmd: &str) {
+    match cmd {
+        ".exit" | ".quit" => {
+            println!("Bye!");
+            std::process::exit(0);
+        }
+        ".help" => {
+            println!("Supported SQL:");
+            println!("  CREATE TABLE <name> (<col> INTEGER|TEXT, ...)");
+            println!("  INSERT INTO <name> VALUES (<val>, ...)");
+            println!("  SELECT * FROM <name>");
+            println!("Meta-commands:");
+            println!("  .help   — show this message");
+            println!("  .exit   — quit");
+        }
+        _ => println!("Unknown meta-command: '{}'", cmd),
+    }
+}
+
+/// Pretty-print query results as an aligned table.
+fn print_table(headers: Vec<String>, rows: Vec<Vec<String>>) {
+    if rows.is_empty() {
+        println!("(0 rows)");
+        return;
+    }
+
+    // Calculate column widths
+    let mut widths: Vec<usize> = headers.iter().map(|h| h.len()).collect();
+    for row in &rows {
+        for (i, cell) in row.iter().enumerate() {
+            if i < widths.len() {
+                widths[i] = widths[i].max(cell.len());
+            }
+        }
+    }
+
+    // Header row
+    let header_line: Vec<String> = headers
+        .iter()
+        .enumerate()
+        .map(|(i, h)| format!("{:<width$}", h, width = widths[i]))
+        .collect();
+    println!("{}", header_line.join(" | "));
+
+    // Divider
+    let divider: Vec<String> = widths.iter().map(|w| "-".repeat(*w)).collect();
+    println!("{}", divider.join("-+-"));
+
+    // Data rows
+    for row in &rows {
+        let cells: Vec<String> = row
+            .iter()
+            .enumerate()
+            .map(|(i, cell)| {
+                let w = widths.get(i).copied().unwrap_or(cell.len());
+                format!("{:<width$}", cell, width = w)
+            })
+            .collect();
+        println!("{}", cells.join(" | "));
+    }
+
+    println!("({} row{})", rows.len(), if rows.len() == 1 { "" } else { "s" });
+}
