@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use crate::types::{Column, Row, Table, Value};
+use crate::types::{Column, DataType, Row, Table, Value};
 
 /// The database engine — holds all tables in memory.
 /// (Milestone 4 will replace this with on-disk storage.)
@@ -32,6 +32,17 @@ impl Storage {
                 "Expected {} values, got {}.",
                 table.columns.len(), values.len()
             ));
+        }
+
+        for (i, (col, val)) in table.columns.iter().zip(values.iter()).enumerate() {
+            match (&col.data_type, val) {
+                (DataType::Integer, Value::Integer(_)) => {}
+                (DataType::Text, Value::Text(_)) => {}
+                _ => return Err(format!(
+                    "Column '{}' (position {}) expects {:?}, got {:?}.",
+                    col.name, i, col.data_type, val
+                )),
+            }
         }
 
         table.rows.push(Row { values });
