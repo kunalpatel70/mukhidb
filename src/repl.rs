@@ -7,6 +7,18 @@ use crate::storage::Storage;
 pub fn run() {
     let mut storage = Storage::new();
 
+    // Restore persisted tables from .db files
+    for path in crate::disk::find_db_files() {
+        match crate::disk::load_table(&path) {
+            Ok(table) => {
+                let name = table.name.clone();
+                storage.restore_table(table);
+                println!("Loaded table '{}' from {}", name, path);
+            }
+            Err(e) => eprintln!("Warning: failed to load {}: {}", path, e),
+        }
+    }
+
     println!("mukhidb v0.1.0  |  Type .exit to quit, .help for hints.");
 
     loop {

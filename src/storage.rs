@@ -17,6 +17,7 @@ impl Storage {
         if self.tables.contains_key(&name) {
             return Err(format!("Table '{}' already exists.", name));
         }
+        crate::disk::create_file(&name, &columns)?;
         self.tables.insert(name.clone(), Table::new(name, columns));
         Ok(())
     }
@@ -45,8 +46,14 @@ impl Storage {
             }
         }
 
+        crate::disk::save_row(table_name, &Row { values: values.clone() })?;
         table.rows.push(Row { values });
         Ok(())
+    }
+
+    /// Restore a table loaded from disk (used on startup).
+    pub fn restore_table(&mut self, table: Table) {
+        self.tables.insert(table.name.clone(), table);
     }
 
     /// Return all rows from a table (SELECT *).
