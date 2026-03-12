@@ -34,6 +34,8 @@ mukhidb> .exit
 - [ ] Milestone 4 — WHERE clause filtering
 - [ ] Milestone 5 — Multiple tables + JOIN
 - [ ] Milestone 6 — Transactions + Write-Ahead Log
+- [ ] Milestone 7 — TCP server + client
+- [ ] Milestone 8 — Concurrency — handle multiple clients simultaneously
 
 ## Learning Resources
 
