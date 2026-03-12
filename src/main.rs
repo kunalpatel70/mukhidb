@@ -1,3 +1,4 @@
+mod disk;
 mod executor;
 mod parser;
 mod repl;

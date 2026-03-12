@@ -5,14 +5,14 @@ how databases work from the ground up.
 
 ## Status
 
-🟢 Milestone 1 complete: REPL + in-memory tables (CREATE TABLE, INSERT, SELECT *)
+🟢 Milestone 2 complete: Disk persistence — tables survive restarts
 
 See [PROGRESS.md](PROGRESS.md) for the full build log.
 
 ## Getting Started
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/mukhidb
+git clone https://github.com/kunalpatel70/mukhidb
 cd mukhidb
 cargo run
 ```
@@ -29,7 +29,7 @@ mukhidb> .exit
 ## Roadmap
 
 - [x] Milestone 1 — REPL + in-memory storage
-- [ ] Milestone 2 — Persist rows to disk (binary flat file)
+- [x] Milestone 2 — Persist rows to disk (delimiter-based flat file)
 - [ ] Milestone 3 — B+Tree storage engine
 - [ ] Milestone 4 — WHERE clause filtering
 - [ ] Milestone 5 — Multiple tables + JOIN
