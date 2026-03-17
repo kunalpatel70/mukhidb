@@ -73,3 +73,69 @@ int:2|text:Bob
 ### What's next
 
 - Milestone 3: B+Tree storage engine — replace the flat file with a page-based tree structure for efficient lookups
+
+---
+
+## Milestone 3 — B+Tree Storage Engine
+
+**Goal:** Replace the delimiter-based flat file with a B+Tree backed by fixed-size pages, giving O(log n) key lookups and sorted iteration.
+
+### What was built
+
+- `pager.rs` — Fixed-size 4096-byte page I/O layer with lazy-loaded cache and dirty-page tracking. Handles read, write, allocate, and flush.
+- `row.rs` — Binary row serialization. `INTEGER` = 8 bytes little-endian, `TEXT` = 256 bytes fixed (4-byte length prefix + 252 bytes content, zero-padded).
+- `btree.rs` — B+Tree with leaf and internal node types. Supports:
+  - Insert with sorted key placement
+  - Leaf splitting when a leaf is full
+  - Internal node splitting when propagation fills a parent
+  - Root splitting (tree grows a new level)
+  - Full sequential scan via leaf sibling chain (`next_leaf` pointers)
+  - `dump_tree()` for human-readable tree visualisation
+- `storage.rs` — Replaced `HashMap<String, Table>` (in-memory `Vec<Row>`) with `HashMap<String, TableStore>` where each `TableStore` holds a `Pager`, column schema, and root page number. No full table copy in memory.
+- `disk.rs` — Slimmed to just `find_db_files()`. All I/O now goes through the pager.
+- `repl.rs` — Startup opens `.db` files via `storage.open_table()`. Added `.btree <table>` meta-command.
+
+### On-disk format
+
+One binary file per table (`<name>.db`), composed of 4096-byte pages:
+
+- **Page 0 — Metadata:** root page number (u32), column count (u32), column definitions (name length + name bytes + type tag)
+- **Page 1+ — B+Tree nodes:**
+  - Leaf: `[type=0x01][num_cells: u32][next_leaf: u32][cells: (key: i64, row_data)...]`
+  - Internal: `[type=0x02][num_keys: u32][right_child: u32][entries: (child: u32, key: i64)...]`
+
+### Row layout (fixed-size)
+
+| Type    | Size on disk | Encoding                              |
+|---------|-------------|---------------------------------------|
+| INTEGER | 8 bytes     | i64 little-endian                     |
+| TEXT    | 256 bytes   | u32 length prefix + up to 252 bytes UTF-8, zero-padded |
+
+For a table `(id INTEGER, name TEXT)`, each row is 264 bytes.
+
+### Key decisions
+
+- **Fixed-size rows** — simplifies cell offset arithmetic and splitting. Variable-size rows are deferred to a future milestone.
+- **First INTEGER column as B+Tree key** — rows are stored sorted by this key. Tables without an INTEGER column use key 0 (degenerate but functional).
+- **Flush after every INSERT** — simple durability guarantee at the cost of write throughput. Batched/deferred flushing is a future optimisation.
+- **Page cache with dirty tracking** — only modified pages are written back on flush. Pages are loaded lazily on first access.
+
+### Meta-commands added
+
+- `.btree <table>` — prints the tree structure showing internal nodes, separator keys, and leaf nodes with their cell keys
+
+### Tests
+
+- 11 unit tests: pager round-trip, row serialization, B+Tree insert (small, large, reverse, duplicates, negatives, single row, empty tree), persistence round-trip, 500-row stress test
+- 6 integration tests: create/insert/select, persistence across restarts, sorted output, type mismatch error, duplicate table error, 200-row stress test
+
+### Known limitations
+
+- TEXT values are capped at 252 bytes (fixed-size slot)
+- No DELETE or UPDATE
+- No WHERE clause (Milestone 4)
+- `.db` files from Milestone 2 are incompatible — must be deleted before upgrading
+
+### What's next
+
+- Milestone 4: WHERE clause filtering — leverage the B+Tree key for efficient lookups

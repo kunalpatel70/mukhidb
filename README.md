@@ -5,9 +5,57 @@ how databases work from the ground up.
 
 ## Status
 
-🟢 Milestone 2 complete: Disk persistence — tables survive restarts
+🟢 Milestone 3 complete: B+Tree storage engine
 
 See [PROGRESS.md](PROGRESS.md) for the full build log.
+
+## Architecture
+
+```
+                        ┌─────────────────┐
+  SQL input ──────────▶ │      REPL       │
+                        │   (repl.rs)     │
+                        └────────┬────────┘
+                                 │ raw string
+                                 ▼
+                        ┌─────────────────┐
+                        │     Parser      │
+                        │  (parser.rs)    │
+                        └────────┬────────┘
+                                 │ Statement enum
+                                 ▼
+                        ┌─────────────────┐
+                        │    Executor     │
+                        │ (executor.rs)   │
+                        └────────┬────────┘
+                                 │ storage API calls
+                                 ▼
+                        ┌─────────────────┐
+                        │    Storage      │
+                        │  (storage.rs)   │
+                        │                 │
+                        │  TableStore per │
+                        │  table: schema  │
+                        │  + root page    │
+                        └────────┬────────┘
+                                 │
+                    ┌────────────┼────────────┐
+                    ▼            ▼            ▼
+             ┌───────────┐ ┌─────────┐ ┌──────────┐
+             │   B+Tree  │ │   Row   │ │  Pager   │
+             │(btree.rs) │ │(row.rs) │ │(pager.rs)│
+             │           │ │serialize│ │ 4KB page │
+             │ insert     │ │ / deser │ │  cache   │
+             │ scan_all   │ └─────────┘ │  + I/O   │
+             │ dump_tree  │             └─────┬────┘
+             └───────────┘                    │
+                                              ▼
+                                        ┌──────────┐
+                                        │  <table> │
+                                        │   .db    │
+                                        │  (disk)  │
+                                        └──────────┘
+```
 
 ## Getting Started
 
@@ -23,6 +71,7 @@ mukhidb> CREATE TABLE users (id INTEGER, name TEXT)
 mukhidb> INSERT INTO users VALUES (1, 'Alice')
 mukhidb> INSERT INTO users VALUES (2, 'Bob')
 mukhidb> SELECT * FROM users
+mukhidb> .btree users
 mukhidb> .exit
 ```
 
@@ -30,12 +79,13 @@ mukhidb> .exit
 
 - [x] Milestone 1 — REPL + in-memory storage
 - [x] Milestone 2 — Persist rows to disk (delimiter-based flat file)
-- [ ] Milestone 3 — B+Tree storage engine
+- [x] Milestone 3 — B+Tree storage engine (fixed-size rows)
 - [ ] Milestone 4 — WHERE clause filtering
 - [ ] Milestone 5 — Multiple tables + JOIN
 - [ ] Milestone 6 — Transactions + Write-Ahead Log
-- [ ] Milestone 7 — TCP server + client
-- [ ] Milestone 8 — Concurrency — handle multiple clients simultaneously
+- [ ] Milestone 7 — Variable-size rows (overflow pages / slot-based layout)
+- [ ] Milestone 8 — TCP server + client
+- [ ] Milestone 9 — Concurrency — handle multiple clients simultaneously
 
 ## Learning Resources
 
