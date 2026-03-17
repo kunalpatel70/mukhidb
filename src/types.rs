@@ -10,6 +10,7 @@ pub enum DataType {
 pub enum Value {
     Integer(i64),
     Text(String),
+    #[allow(dead_code)] // reserved for future NULL support
     Null,
 }
 
@@ -36,16 +37,3 @@ pub struct Row {
     pub values: Vec<Value>,
 }
 
-/// A full table: schema + rows.
-#[derive(Debug)]
-pub struct Table {
-    pub name: String,
-    pub columns: Vec<Column>,
-    pub rows: Vec<Row>,
-}
-
-impl Table {
-    pub fn new(name: String, columns: Vec<Column>) -> Self {
-        Table { name, columns, rows: Vec::new() }
-    }
-}

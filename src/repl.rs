@@ -7,19 +7,16 @@ use crate::storage::Storage;
 pub fn run() {
     let mut storage = Storage::new();
 
-    // Restore persisted tables from .db files
+    // Restore persisted tables from .db files (now backed by pager + B+Tree)
     for path in crate::disk::find_db_files() {
-        match crate::disk::load_table(&path) {
-            Ok(table) => {
-                let name = table.name.clone();
-                storage.restore_table(table);
-                println!("Loaded table '{}' from {}", name, path);
-            }
+        let name = path.trim_end_matches(".db").to_string();
+        match storage.open_table(&name, &path) {
+            Ok(_) => println!("Loaded table '{}' from {}", name, path),
             Err(e) => eprintln!("Warning: failed to load {}: {}", path, e),
         }
     }
 
-    println!("mukhidb v0.1.0  |  Type .exit to quit, .help for hints.");
+    println!("mukhidb v0.2.0  |  Type .exit to quit, .help for hints.");
 
     loop {
         print!("mukhidb> ");
@@ -40,7 +37,7 @@ pub fn run() {
 
         // Meta-commands (start with '.')
         if input.starts_with('.') {
-            handle_meta(input);
+            handle_meta(input, &mut storage);
             continue;
         }
 
@@ -56,7 +53,7 @@ pub fn run() {
     println!("\nBye!");
 }
 
-fn handle_meta(cmd: &str) {
+fn handle_meta(cmd: &str, storage: &mut Storage) {
     match cmd {
         ".exit" | ".quit" => {
             println!("Bye!");
@@ -68,8 +65,20 @@ fn handle_meta(cmd: &str) {
             println!("  INSERT INTO <name> VALUES (<val>, ...)");
             println!("  SELECT * FROM <name>");
             println!("Meta-commands:");
-            println!("  .help   — show this message");
-            println!("  .exit   — quit");
+            println!("  .help            — show this message");
+            println!("  .btree <table>   — visualise B+Tree structure");
+            println!("  .exit            — quit");
+        }
+        _ if cmd.starts_with(".btree") => {
+            let table = cmd[".btree".len()..].trim();
+            if table.is_empty() {
+                println!("Usage: .btree <table_name>");
+            } else {
+                match storage.dump_btree(table) {
+                    Ok(tree) => println!("{}", tree),
+                    Err(e) => println!("Error: {}", e),
+                }
+            }
         }
         _ => println!("Unknown meta-command: '{}'", cmd),
     }
