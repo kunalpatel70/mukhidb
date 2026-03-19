@@ -113,6 +113,132 @@ fn duplicate_table_error() {
 }
 
 #[test]
+fn where_eq_integer() {
+    let dir = tmpdir("where_eq_int");
+    let out = run_in_dir(
+        &dir,
+        "CREATE TABLE users (id INTEGER, name TEXT)\n\
+         INSERT INTO users VALUES (1, 'Alice')\n\
+         INSERT INTO users VALUES (2, 'Bob')\n\
+         INSERT INTO users VALUES (3, 'Charlie')\n\
+         SELECT * FROM users WHERE id = 2\n\
+         .exit\n",
+    );
+    assert!(out.contains("Bob"));
+    assert!(!out.contains("Alice"));
+    assert!(!out.contains("Charlie"));
+    assert!(out.contains("(1 row)"));
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn where_eq_text() {
+    let dir = tmpdir("where_eq_text");
+    let out = run_in_dir(
+        &dir,
+        "CREATE TABLE users (id INTEGER, name TEXT)\n\
+         INSERT INTO users VALUES (1, 'Alice')\n\
+         INSERT INTO users VALUES (2, 'Bob')\n\
+         SELECT * FROM users WHERE name = 'Alice'\n\
+         .exit\n",
+    );
+    assert!(out.contains("Alice"));
+    assert!(!out.contains("Bob"));
+    assert!(out.contains("(1 row)"));
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn where_gt() {
+    let dir = tmpdir("where_gt");
+    let out = run_in_dir(
+        &dir,
+        "CREATE TABLE t (id INTEGER, name TEXT)\n\
+         INSERT INTO t VALUES (1, 'A')\n\
+         INSERT INTO t VALUES (5, 'B')\n\
+         INSERT INTO t VALUES (10, 'C')\n\
+         SELECT * FROM t WHERE id > 3\n\
+         .exit\n",
+    );
+    assert!(!out.contains("| A"));
+    assert!(out.contains("B"));
+    assert!(out.contains("C"));
+    assert!(out.contains("(2 rows)"));
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn where_lt() {
+    let dir = tmpdir("where_lt");
+    let out = run_in_dir(
+        &dir,
+        "CREATE TABLE t (id INTEGER, name TEXT)\n\
+         INSERT INTO t VALUES (1, 'A')\n\
+         INSERT INTO t VALUES (5, 'B')\n\
+         INSERT INTO t VALUES (10, 'C')\n\
+         SELECT * FROM t WHERE id < 5\n\
+         .exit\n",
+    );
+    assert!(out.contains("A"));
+    assert!(!out.contains("| B"));
+    assert!(!out.contains("C"));
+    assert!(out.contains("(1 row)"));
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn where_no_match() {
+    let dir = tmpdir("where_nomatch");
+    let out = run_in_dir(
+        &dir,
+        "CREATE TABLE t (id INTEGER, name TEXT)\n\
+         INSERT INTO t VALUES (1, 'A')\n\
+         SELECT * FROM t WHERE id = 999\n\
+         .exit\n",
+    );
+    assert!(out.contains("(0 rows)"));
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn select_all_still_works() {
+    let dir = tmpdir("select_all");
+    let out = run_in_dir(
+        &dir,
+        "CREATE TABLE t (id INTEGER, name TEXT)\n\
+         INSERT INTO t VALUES (1, 'A')\n\
+         INSERT INTO t VALUES (2, 'B')\n\
+         SELECT * FROM t\n\
+         .exit\n",
+    );
+    assert!(out.contains("(2 rows)"));
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn where_across_split() {
+    let dir = tmpdir("where_split");
+    // 20 rows forces a leaf split for (id INTEGER, name TEXT) schema (max 15 per leaf)
+    let mut input = String::from("CREATE TABLE t (id INTEGER, name TEXT)\n");
+    for i in 1..=20 {
+        input.push_str(&format!("INSERT INTO t VALUES ({}, 'user{}')\n", i, i));
+    }
+    input.push_str("SELECT * FROM t WHERE id = 1\n");   // left leaf
+    input.push_str("SELECT * FROM t WHERE id = 20\n");  // right leaf
+    input.push_str("SELECT * FROM t WHERE id > 15\n");  // spans the split point
+    input.push_str(".exit\n");
+
+    let out = run_in_dir(&dir, &input);
+    // id = 1 -> one row from left leaf
+    assert!(out.contains("user1"));
+    // id = 20 -> one row from right leaf
+    assert!(out.contains("user20"));
+    // id > 15 -> 5 rows (16..20)
+    assert!(out.contains("(5 rows)"));
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn many_rows_stress() {
     let dir = tmpdir("stress");
     let mut input = String::from("CREATE TABLE t (id INTEGER, name TEXT)\n");

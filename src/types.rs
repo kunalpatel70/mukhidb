@@ -37,3 +37,19 @@ pub struct Row {
     pub values: Vec<Value>,
 }
 
+/// Comparison operators for WHERE clauses.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CompOp {
+    Eq,
+    Lt,
+    Gt,
+}
+
+/// A single WHERE condition: column <op> value.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Expr {
+    pub column: String,
+    pub op: CompOp,
+    pub value: Value,
+}
+

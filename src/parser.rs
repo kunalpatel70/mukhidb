@@ -1,4 +1,4 @@
-use crate::types::{Column, DataType, Value};
+use crate::types::{Column, CompOp, DataType, Expr, Value};
 
 /// All the SQL statements your DB understands (so far).
 #[derive(Debug, PartialEq)]
@@ -13,6 +13,7 @@ pub enum Statement {
     },
     Select {
         table_name: String,
+        where_clause: Option<Expr>,
     },
     Unknown(String),
 }
@@ -96,9 +97,38 @@ fn parse_insert(input: &str) -> Statement {
 }
 
 fn parse_select(input: &str) -> Statement {
-    // Expected: SELECT * FROM <name>
+    // Expected: SELECT * FROM <name> [WHERE <col> <op> <val>]
     let upper = input.to_uppercase();
     let from_pos = upper.find("FROM").unwrap_or(input.len());
-    let table_name = input[from_pos + "FROM".len()..].trim().to_string();
-    Statement::Select { table_name }
+    let after_from = input[from_pos + "FROM".len()..].trim();
+
+    // Split on WHERE (case-insensitive)
+    let after_upper = after_from.to_uppercase();
+    let (table_name, where_clause) = if let Some(w) = after_upper.find("WHERE") {
+        let tname = after_from[..w].trim().to_string();
+        let cond = after_from[w + "WHERE".len()..].trim();
+        (tname, parse_where(cond))
+    } else {
+        (after_from.to_string(), None)
+    };
+
+    Statement::Select { table_name, where_clause }
+}
+
+fn parse_where(cond: &str) -> Option<Expr> {
+    // Try two-char operators first, then single-char
+    let ops: &[(&str, CompOp)] = &[("=", CompOp::Eq), (">", CompOp::Gt), ("<", CompOp::Lt)];
+    for &(sym, ref op) in ops {
+        if let Some(pos) = cond.find(sym) {
+            let col = cond[..pos].trim().to_string();
+            let raw = cond[pos + sym.len()..].trim();
+            let value = if let Ok(n) = raw.parse::<i64>() {
+                Value::Integer(n)
+            } else {
+                Value::Text(raw.trim_matches('\'').trim_matches('"').to_string())
+            };
+            return Some(Expr { column: col, op: op.clone(), value });
+        }
+    }
+    None
 }

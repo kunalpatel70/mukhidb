@@ -5,7 +5,7 @@ how databases work from the ground up.
 
 ## Status
 
-🟢 Milestone 3 complete: B+Tree storage engine
+🟢 Milestone 4 complete: WHERE clause filtering
 
 See [PROGRESS.md](PROGRESS.md) for the full build log.
 
@@ -80,7 +80,7 @@ mukhidb> .exit
 - [x] Milestone 1 — REPL + in-memory storage
 - [x] Milestone 2 — Persist rows to disk (delimiter-based flat file)
 - [x] Milestone 3 — B+Tree storage engine (fixed-size rows)
-- [ ] Milestone 4 — WHERE clause filtering
+- [x] Milestone 4 — WHERE clause filtering (`=`, `>`, `<`)
 - [ ] Milestone 5 — Multiple tables + JOIN
 - [ ] Milestone 6 — Transactions + Write-Ahead Log
 - [ ] Milestone 7 — Variable-size rows (overflow pages / slot-based layout)
