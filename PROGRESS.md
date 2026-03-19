@@ -139,3 +139,46 @@ For a table `(id INTEGER, name TEXT)`, each row is 264 bytes.
 ### What's next
 
 - Milestone 4: WHERE clause filtering — leverage the B+Tree key for efficient lookups
+
+---
+
+## Milestone 4 — WHERE Clause Filtering
+
+**Goal:** Support filtering rows with `SELECT * FROM <table> WHERE <col> <op> <val>`, with `=`, `>`, and `<` operators.
+
+### What was built
+
+- `types.rs` — Added `CompOp` enum (Eq, Lt, Gt) and `Expr` struct (column + op + value) to represent a single WHERE condition.
+- `parser.rs` — Extended `Statement::Select` with an `Option<Expr>` field. After parsing `FROM <table>`, checks for a `WHERE` keyword and parses `<column> <op> <value>`.
+- `executor.rs` — Added `evaluate()` function that resolves a column name to its index, then compares the row's value against the expression. Filtering is applied after `select_all` returns all rows (full scan + filter).
+- `repl.rs` — Updated `.help` text to show WHERE syntax.
+
+### SQL supported
+
+```sql
+SELECT * FROM users WHERE id = 2
+SELECT * FROM users WHERE name = 'Alice'
+SELECT * FROM users WHERE id > 5
+SELECT * FROM users WHERE id < 10
+```
+
+### Key decisions
+
+- **Filter in executor, not storage** — storage returns all rows, executor applies the predicate. Keeps the storage layer simple. Pushing the filter down (and using B+Tree key lookups for key-column equality) is a future optimisation.
+- **Single condition only** — no AND/OR compound expressions yet. One operator, one column, one value.
+- **Case-insensitive column matching** — `WHERE Name = 'Alice'` works the same as `WHERE name = 'Alice'`.
+
+### Tests
+
+- 7 new integration tests: equality on integer, equality on text, greater-than, less-than, no-match (0 rows), select-all regression, and WHERE across a B+Tree leaf split (20 rows)
+
+### Known limitations
+
+- **No B+Tree key optimisation** — WHERE on the key column still does a full leaf scan. A point lookup / range scan in `btree.rs` would avoid reading every leaf.
+- **No compound conditions** — no `AND`, `OR`, or parenthesised expressions.
+- **No `>=`, `<=`, `!=` operators** — only `=`, `>`, `<` for now.
+- **Duplicate keys are not rejected** — inserting two rows with the same key (e.g. `INSERT INTO t VALUES (1, 'A')` twice) stores both. This differs from SQLite, which either errors on PRIMARY KEY conflict or uses an internal auto-increment rowid so user-column duplicates don't collide in the tree. A future milestone should either enforce unique keys, support upsert, or introduce an internal rowid.
+
+### What's next
+
+- Milestone 5: Multiple tables + JOIN

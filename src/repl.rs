@@ -63,7 +63,7 @@ fn handle_meta(cmd: &str, storage: &mut Storage) {
             println!("Supported SQL:");
             println!("  CREATE TABLE <name> (<col> INTEGER|TEXT, ...)");
             println!("  INSERT INTO <name> VALUES (<val>, ...)");
-            println!("  SELECT * FROM <name>");
+            println!("  SELECT * FROM <name> [WHERE <col> = | > | < <val>]");
             println!("Meta-commands:");
             println!("  .help            — show this message");
             println!("  .btree <table>   — visualise B+Tree structure");
