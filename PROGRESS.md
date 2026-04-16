@@ -182,3 +182,52 @@ SELECT * FROM users WHERE id < 10
 ### What's next
 
 - Milestone 5: Multiple tables + JOIN
+
+---
+
+## Milestone 5 — Multiple Tables + JOIN
+
+**Goal:** Support INNER JOIN between two tables with an ON equality condition, and WHERE filtering on joined results.
+
+### What was built
+
+- `types.rs` — Added `JoinClause` struct (right_table, left_col, right_col).
+- `parser.rs` — Extended `Statement::Select` with `join: Option<JoinClause>`. Parses `JOIN <table> ON <col> = <col>` between FROM and WHERE. Supports both `table.col` and bare `col` syntax in the ON clause.
+- `executor.rs` — Refactored SELECT execution into `execute_select` (single table) and `execute_join` (two tables). The join implementation:
+  - Fetches both tables via `select_all`
+  - Resolves join column indices (handles `table.col` dot notation)
+  - Nested loop: for each left row × right row, emits combined row if join columns match
+  - Prefixes all output headers with `table_name.` to avoid column name ambiguity
+  - Applies WHERE filter on the joined result
+- `repl.rs` — Updated `.help` text to show JOIN syntax.
+
+### SQL supported
+
+```sql
+SELECT * FROM users JOIN orders ON users.id = orders.user_id
+SELECT * FROM users JOIN orders ON id = user_id
+SELECT * FROM users JOIN orders ON users.id = orders.user_id WHERE users.name = 'Alice'
+```
+
+### Key decisions
+
+- **Nested loop join** — O(n × m), simplest correct implementation. Hash join or sort-merge join are future optimisations.
+- **Always prefix headers** — joined output uses `table.column` for all columns (e.g. `users.id | users.name | orders.id | orders.user_id`). Avoids ambiguity without extra logic.
+- **Join in executor, not storage** — the executor calls `select_all` on both tables and does the join in memory. Keeps the storage layer unchanged.
+- **Multiple tables already worked** — each CREATE TABLE creates a separate `.db` file with its own TableStore. Storage holds them all in a HashMap. No changes needed for multi-table support itself.
+
+### Tests
+
+- 4 new integration tests: basic join (3 matched rows across 2 tables), join + WHERE filter, join with no matches (0 rows), bare column names in ON clause
+
+### Known limitations
+
+- **INNER JOIN only** — no LEFT, RIGHT, or FULL OUTER JOIN.
+- **Two tables only** — no chained joins (`a JOIN b JOIN c`).
+- **Equality join only** — ON clause only supports `=`, not `>`, `<`, or expressions.
+- **No SELECT column list** — always `SELECT *`, no way to pick specific columns.
+- **Nested loop performance** — O(n × m) with no index usage. A hash join or leveraging the B+Tree key for the join column would be significantly faster for large tables.
+
+### What's next
+
+- Milestone 6: Transactions + Write-Ahead Log

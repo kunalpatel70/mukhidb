@@ -1,4 +1,4 @@
-use crate::types::{Column, CompOp, DataType, Expr, Value};
+use crate::types::{Column, CompOp, DataType, Expr, JoinClause, Value};
 
 /// All the SQL statements your DB understands (so far).
 #[derive(Debug, PartialEq)]
@@ -13,6 +13,7 @@ pub enum Statement {
     },
     Select {
         table_name: String,
+        join: Option<JoinClause>,
         where_clause: Option<Expr>,
     },
     Unknown(String),
@@ -97,22 +98,66 @@ fn parse_insert(input: &str) -> Statement {
 }
 
 fn parse_select(input: &str) -> Statement {
-    // Expected: SELECT * FROM <name> [WHERE <col> <op> <val>]
+    // Expected: SELECT * FROM <name> [JOIN <name> ON <col> = <col>] [WHERE <col> <op> <val>]
     let upper = input.to_uppercase();
     let from_pos = upper.find("FROM").unwrap_or(input.len());
     let after_from = input[from_pos + "FROM".len()..].trim();
-
-    // Split on WHERE (case-insensitive)
     let after_upper = after_from.to_uppercase();
-    let (table_name, where_clause) = if let Some(w) = after_upper.find("WHERE") {
-        let tname = after_from[..w].trim().to_string();
-        let cond = after_from[w + "WHERE".len()..].trim();
-        (tname, parse_where(cond))
+
+    // Check for JOIN
+    let (table_name, join, remainder) = if let Some(j) = after_upper.find("JOIN") {
+        let tname = after_from[..j].trim().to_string();
+        let after_join = after_from[j + "JOIN".len()..].trim();
+        let aj_upper = after_join.to_uppercase();
+
+        // Find ON keyword
+        let on_pos = aj_upper.find(" ON ").unwrap_or(after_join.len());
+        let right_table = after_join[..on_pos].trim().to_string();
+        let after_on = after_join.get(on_pos + 4..).unwrap_or("").trim();
+
+        // Parse ON <left_col> = <right_col>, stop at WHERE if present
+        let ao_upper = after_on.to_uppercase();
+        let (on_cond, rest) = if let Some(w) = ao_upper.find("WHERE") {
+            (after_on[..w].trim(), after_on[w..].trim())
+        } else {
+            (after_on, "")
+        };
+
+        // Split on '='
+        let join = if let Some(eq) = on_cond.find('=') {
+            let left_col = on_cond[..eq].trim().to_string();
+            let right_col = on_cond[eq + 1..].trim().to_string();
+            Some(JoinClause { right_table, left_col, right_col })
+        } else {
+            None
+        };
+        (tname, join, rest.to_string())
     } else {
-        (after_from.to_string(), None)
+        (String::new(), None, after_from.to_string())
     };
 
-    Statement::Select { table_name, where_clause }
+    // If no JOIN, table_name is everything before WHERE
+    let (table_name, where_clause) = if join.is_none() {
+        let rem_upper = remainder.to_uppercase();
+        if let Some(w) = rem_upper.find("WHERE") {
+            let tname = remainder[..w].trim().to_string();
+            let cond = remainder[w + "WHERE".len()..].trim();
+            (tname, parse_where(cond))
+        } else {
+            (remainder.trim().to_string(), None)
+        }
+    } else {
+        // JOIN present — parse WHERE from remainder
+        let rem_upper = remainder.to_uppercase();
+        let where_clause = if let Some(w) = rem_upper.find("WHERE") {
+            parse_where(remainder[w + "WHERE".len()..].trim())
+        } else {
+            None
+        };
+        (table_name, where_clause)
+    };
+
+    Statement::Select { table_name, join, where_clause }
 }
 
 fn parse_where(cond: &str) -> Option<Expr> {
