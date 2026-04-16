@@ -239,6 +239,84 @@ fn where_across_split() {
 }
 
 #[test]
+fn join_basic() {
+    let dir = tmpdir("join_basic");
+    let out = run_in_dir(
+        &dir,
+        "CREATE TABLE users (id INTEGER, name TEXT)\n\
+         CREATE TABLE orders (id INTEGER, user_id INTEGER)\n\
+         INSERT INTO users VALUES (1, 'Alice')\n\
+         INSERT INTO users VALUES (2, 'Bob')\n\
+         INSERT INTO orders VALUES (10, 1)\n\
+         INSERT INTO orders VALUES (20, 2)\n\
+         INSERT INTO orders VALUES (30, 1)\n\
+         SELECT * FROM users JOIN orders ON users.id = orders.user_id\n\
+         .exit\n",
+    );
+    // Alice matches orders 10 and 30, Bob matches order 20
+    assert!(out.contains("Alice"));
+    assert!(out.contains("Bob"));
+    assert!(out.contains("(3 rows)"));
+    // Headers should be prefixed
+    assert!(out.contains("users.id"));
+    assert!(out.contains("orders.user_id"));
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn join_with_where() {
+    let dir = tmpdir("join_where");
+    let out = run_in_dir(
+        &dir,
+        "CREATE TABLE users (id INTEGER, name TEXT)\n\
+         CREATE TABLE orders (id INTEGER, user_id INTEGER)\n\
+         INSERT INTO users VALUES (1, 'Alice')\n\
+         INSERT INTO users VALUES (2, 'Bob')\n\
+         INSERT INTO orders VALUES (10, 1)\n\
+         INSERT INTO orders VALUES (20, 2)\n\
+         SELECT * FROM users JOIN orders ON users.id = orders.user_id WHERE users.name = 'Alice'\n\
+         .exit\n",
+    );
+    assert!(out.contains("Alice"));
+    assert!(!out.contains("Bob"));
+    assert!(out.contains("(1 row)"));
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn join_no_match() {
+    let dir = tmpdir("join_nomatch");
+    let out = run_in_dir(
+        &dir,
+        "CREATE TABLE a (id INTEGER, val TEXT)\n\
+         CREATE TABLE b (id INTEGER, a_id INTEGER)\n\
+         INSERT INTO a VALUES (1, 'x')\n\
+         INSERT INTO b VALUES (10, 999)\n\
+         SELECT * FROM a JOIN b ON a.id = b.a_id\n\
+         .exit\n",
+    );
+    assert!(out.contains("(0 rows)"));
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn join_bare_column_names() {
+    let dir = tmpdir("join_bare");
+    let out = run_in_dir(
+        &dir,
+        "CREATE TABLE users (id INTEGER, name TEXT)\n\
+         CREATE TABLE orders (id INTEGER, user_id INTEGER)\n\
+         INSERT INTO users VALUES (1, 'Alice')\n\
+         INSERT INTO orders VALUES (10, 1)\n\
+         SELECT * FROM users JOIN orders ON id = user_id\n\
+         .exit\n",
+    );
+    assert!(out.contains("Alice"));
+    assert!(out.contains("(1 row)"));
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn many_rows_stress() {
     let dir = tmpdir("stress");
     let mut input = String::from("CREATE TABLE t (id INTEGER, name TEXT)\n");

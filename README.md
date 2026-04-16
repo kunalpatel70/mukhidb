@@ -5,7 +5,7 @@ how databases work from the ground up.
 
 ## Status
 
-🟢 Milestone 4 complete: WHERE clause filtering
+🟢 Milestone 5 complete: Multiple tables + JOIN
 
 See [PROGRESS.md](PROGRESS.md) for the full build log.
 
@@ -68,9 +68,14 @@ cargo run
 Then try:
 ```sql
 mukhidb> CREATE TABLE users (id INTEGER, name TEXT)
+mukhidb> CREATE TABLE orders (id INTEGER, user_id INTEGER)
 mukhidb> INSERT INTO users VALUES (1, 'Alice')
 mukhidb> INSERT INTO users VALUES (2, 'Bob')
+mukhidb> INSERT INTO orders VALUES (100, 1)
+mukhidb> INSERT INTO orders VALUES (101, 2)
 mukhidb> SELECT * FROM users
+mukhidb> SELECT * FROM users WHERE id = 1
+mukhidb> SELECT * FROM users JOIN orders ON users.id = orders.user_id
 mukhidb> .btree users
 mukhidb> .exit
 ```
@@ -81,7 +86,7 @@ mukhidb> .exit
 - [x] Milestone 2 — Persist rows to disk (delimiter-based flat file)
 - [x] Milestone 3 — B+Tree storage engine (fixed-size rows)
 - [x] Milestone 4 — WHERE clause filtering (`=`, `>`, `<`)
-- [ ] Milestone 5 — Multiple tables + JOIN
+- [x] Milestone 5 — Multiple tables + INNER JOIN
 - [ ] Milestone 6 — Transactions + Write-Ahead Log
 - [ ] Milestone 7 — Variable-size rows (overflow pages / slot-based layout)
 - [ ] Milestone 8 — TCP server + client

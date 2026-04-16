@@ -53,3 +53,11 @@ pub struct Expr {
     pub value: Value,
 }
 
+/// JOIN clause: FROM <left> JOIN <right> ON <left_col> = <right_col>
+#[derive(Debug, Clone, PartialEq)]
+pub struct JoinClause {
+    pub right_table: String,
+    pub left_col: String,
+    pub right_col: String,
+}
+
