@@ -7,6 +7,7 @@ mod repl;
 mod row;
 mod storage;
 mod types;
+mod wal;
 
 fn main() {
     repl::run();

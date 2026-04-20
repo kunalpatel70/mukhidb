@@ -67,11 +67,12 @@ pub struct TableStore {
 
 pub struct Storage {
     tables: HashMap<String, TableStore>,
+    in_transaction: bool,
 }
 
 impl Storage {
     pub fn new() -> Self {
-        Storage { tables: HashMap::new() }
+        Storage { tables: HashMap::new(), in_transaction: false }
     }
 
     /// Open an existing table from a .db file.
@@ -99,7 +100,9 @@ impl Storage {
         let root_page = btree::create_tree(&mut pager)?;
 
         write_metadata(&mut pager, root_page, &columns)?;
-        pager.flush()?;
+        if !self.in_transaction {
+            pager.flush()?;
+        }
 
         self.tables.insert(
             name.clone(),
@@ -151,7 +154,9 @@ impl Storage {
             store.root_page = new_root;
             write_metadata(&mut store.pager, new_root, &store.columns)?;
         }
-        store.pager.flush()?;
+        if !self.in_transaction {
+            store.pager.flush()?;
+        }
         Ok(())
     }
 
@@ -170,6 +175,42 @@ impl Storage {
             .map(|buf| row::deserialize(buf, &store.columns))
             .collect();
         Ok((headers, rows))
+    }
+
+    pub fn begin(&mut self) -> Result<(), String> {
+        if self.in_transaction {
+            return Err("Already in a transaction.".to_string());
+        }
+        for store in self.tables.values_mut() {
+            store.pager.begin()?;
+        }
+        self.in_transaction = true;
+        Ok(())
+    }
+
+    pub fn commit(&mut self) -> Result<(), String> {
+        if !self.in_transaction {
+            return Err("No active transaction.".to_string());
+        }
+        for store in self.tables.values_mut() {
+            store.pager.commit()?;
+        }
+        self.in_transaction = false;
+        Ok(())
+    }
+
+    pub fn rollback(&mut self) -> Result<(), String> {
+        if !self.in_transaction {
+            return Err("No active transaction.".to_string());
+        }
+        for store in self.tables.values_mut() {
+            store.pager.rollback()?;
+            // Re-read root_page from metadata since dirty pages were discarded.
+            let (root, _) = read_metadata(&mut store.pager)?;
+            store.root_page = root;
+        }
+        self.in_transaction = false;
+        Ok(())
     }
 
     /// Dump the B+Tree structure for a table as a human-readable string.
