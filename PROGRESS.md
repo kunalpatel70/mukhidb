@@ -231,3 +231,84 @@ SELECT * FROM users JOIN orders ON users.id = orders.user_id WHERE users.name = 
 ### What's next
 
 - Milestone 6: Transactions + Write-Ahead Log
+
+---
+
+## Milestone 6 — Transactions + Write-Ahead Log
+
+**Goal:** Atomic multi-statement transactions with crash-safe durability via a Write-Ahead Log.
+
+### What was built
+
+- `wal.rs` — New module implementing a Write-Ahead Log:
+  - Fixed-size records (4109 bytes): `[type: u8][txn_id: u64][page_num: u32][page_data: 4096 bytes]`
+  - Two record types: `PAGE_WRITE` (0x01) and `COMMIT` (0x02)
+  - `append_page()` — writes a dirty page to the WAL
+  - `append_commit()` — writes a commit marker and fsyncs the WAL
+  - `recover()` — reads the WAL and returns only records from committed transactions (uncommitted records are discarded)
+  - `truncate()` — resets the WAL to zero bytes after successful flush to `.db`
+  - Auto-cleanup of empty WAL files on drop
+- `pager.rs` — Integrated WAL into the page I/O layer:
+  - `begin()` — marks the start of an explicit transaction
+  - `commit()` — WAL-write dirty pages → fsync WAL → apply to `.db` → fsync `.db` → truncate WAL
+  - `rollback()` — discards dirty pages from cache (re-read from disk on next access), truncates WAL
+  - `flush()` — now routes through `commit()` for auto-commit mode
+  - Crash recovery on `open()` — if a WAL file exists with committed records, replays them to the `.db` before proceeding
+- `storage.rs` — Added `begin()`, `commit()`, `rollback()` that fan out to all table pagers. `insert()` and `create_table()` skip auto-flush when inside an explicit transaction.  Rollback re-reads `root_page` from on-disk metadata since dirty pages are discarded.
+- `parser.rs` — Parses `BEGIN`, `COMMIT`, `ROLLBACK` as new `Statement` variants.
+- `executor.rs` — Handles the three new statement types, returning success/error messages.
+- `repl.rs` — Updated `.help` text to list transaction commands.
+
+### SQL supported
+
+```sql
+BEGIN
+INSERT INTO users VALUES (1, 'Alice')
+INSERT INTO users VALUES (2, 'Bob')
+COMMIT
+
+BEGIN
+INSERT INTO users VALUES (3, 'Charlie')
+ROLLBACK
+```
+
+Without an explicit `BEGIN`, every statement auto-commits (same behavior as before, now WAL-protected).
+
+### Crash safety — the commit sequence
+
+```
+1. Write dirty pages to WAL file
+2. fsync WAL                      ← WAL is durable
+3. Write dirty pages to .db file
+4. fsync .db                      ← .db is durable
+5. Truncate WAL to 0 bytes        ← cleanup
+```
+
+Crash at any point is safe:
+- Before step 2: WAL has no commit marker → recovery discards it, `.db` untouched
+- Between steps 2–4: WAL has committed records → recovery replays them (idempotent)
+- After step 4: everything is durable, WAL truncation is just cleanup
+
+### Key decisions
+
+- **Truncate-on-commit WAL** — the WAL is reset to zero after each commit. Simpler than checkpoint-based WAL (SQLite WAL mode), and sufficient for a single-client database. WAL size is bounded to one transaction's worth of dirty pages.
+- **Per-table WAL files** — matches the existing per-table `.db` architecture. Each table gets a `<name>.db.wal` file. Multi-table atomicity is best-effort (each table commits independently).
+- **Rollback = discard dirty pages** — since the pager caches pages in memory, rollback simply drops dirty pages and lets them be re-read from the unchanged `.db` file on next access. Also re-reads `root_page` from metadata since a B+Tree root split may have changed it.
+- **Auto-commit preserved** — without `BEGIN`, each statement flushes through the WAL automatically, maintaining backward compatibility with all existing behavior.
+
+### Tests
+
+- 4 new unit tests in `wal.rs`: committed record recovery, uncommitted record discard, truncation clears WAL, multi-txn filtering (only committed txns recovered)
+- 1 new unit test in `pager.rs`: rollback discards changes and restores original data
+- 7 new integration tests: transaction commit, rollback, rollback preserves prior data across restart, commit persists across restart, double BEGIN error, COMMIT without BEGIN error, ROLLBACK without BEGIN error
+
+### Known limitations
+
+- **No multi-table atomicity** — `BEGIN`/`COMMIT` fans out to each table's pager independently. If the process crashes after committing table A but before committing table B, the two tables can be inconsistent. A single shared WAL would fix this.
+- **No savepoints** — no nested transactions or `SAVEPOINT`/`RELEASE`.
+- **No WAL size limit** — a very long transaction could produce a large WAL. A max-size check could be added.
+- **CREATE TABLE inside a transaction** — creates the `.db` file immediately (can't be rolled back at the file level). The table's data inserts within the transaction are rollback-safe, but the file creation itself is not.
+
+### What's next
+
+- Milestone 7: Variable-size rows (overflow pages / slot-based layout)

@@ -64,6 +64,7 @@ fn handle_meta(cmd: &str, storage: &mut Storage) {
             println!("  CREATE TABLE <name> (<col> INTEGER|TEXT, ...)");
             println!("  INSERT INTO <name> VALUES (<val>, ...)");
             println!("  SELECT * FROM <name> [JOIN <name> ON <col> = <col>] [WHERE ...]");
+            println!("  BEGIN / COMMIT / ROLLBACK");
             println!("Meta-commands:");
             println!("  .help            — show this message");
             println!("  .btree <table>   — visualise B+Tree structure");

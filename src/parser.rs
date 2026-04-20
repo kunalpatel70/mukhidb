@@ -16,6 +16,9 @@ pub enum Statement {
         join: Option<JoinClause>,
         where_clause: Option<Expr>,
     },
+    Begin,
+    Commit,
+    Rollback,
     Unknown(String),
 }
 
@@ -30,6 +33,12 @@ pub fn parse(input: &str) -> Statement {
         parse_insert(input)
     } else if upper.starts_with("SELECT") {
         parse_select(input)
+    } else if upper == "BEGIN" {
+        Statement::Begin
+    } else if upper == "COMMIT" {
+        Statement::Commit
+    } else if upper == "ROLLBACK" {
+        Statement::Rollback
     } else {
         Statement::Unknown(input.to_string())
     }

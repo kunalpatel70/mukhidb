@@ -5,7 +5,7 @@ how databases work from the ground up.
 
 ## Status
 
-🟢 Milestone 5 complete: Multiple tables + JOIN
+🟢 Milestone 6 complete: Transactions + Write-Ahead Log
 
 See [PROGRESS.md](PROGRESS.md) for the full build log.
 
@@ -47,14 +47,15 @@ See [PROGRESS.md](PROGRESS.md) for the full build log.
              │           │ │serialize│ │ 4KB page │
              │ insert     │ │ / deser │ │  cache   │
              │ scan_all   │ └─────────┘ │  + I/O   │
-             │ dump_tree  │             └─────┬────┘
-             └───────────┘                    │
-                                              ▼
-                                        ┌──────────┐
-                                        │  <table> │
-                                        │   .db    │
-                                        │  (disk)  │
-                                        └──────────┘
+             │ dump_tree  │             └────┬─────┘
+             └───────────┘                   │
+                                    ┌────────┼────────┐
+                                    ▼                  ▼
+                              ┌──────────┐      ┌───────────┐
+                              │  <table> │      │  <table>  │
+                              │   .db    │      │  .db.wal  │
+                              │  (disk)  │      │   (WAL)   │
+                              └──────────┘      └───────────┘
 ```
 
 ## Getting Started
@@ -76,6 +77,10 @@ mukhidb> INSERT INTO orders VALUES (101, 2)
 mukhidb> SELECT * FROM users
 mukhidb> SELECT * FROM users WHERE id = 1
 mukhidb> SELECT * FROM users JOIN orders ON users.id = orders.user_id
+mukhidb> BEGIN
+mukhidb> INSERT INTO users VALUES (3, 'Charlie')
+mukhidb> ROLLBACK
+mukhidb> SELECT * FROM users
 mukhidb> .btree users
 mukhidb> .exit
 ```
@@ -87,7 +92,7 @@ mukhidb> .exit
 - [x] Milestone 3 — B+Tree storage engine (fixed-size rows)
 - [x] Milestone 4 — WHERE clause filtering (`=`, `>`, `<`)
 - [x] Milestone 5 — Multiple tables + INNER JOIN
-- [ ] Milestone 6 — Transactions + Write-Ahead Log
+- [x] Milestone 6 — Transactions + Write-Ahead Log
 - [ ] Milestone 7 — Variable-size rows (overflow pages / slot-based layout)
 - [ ] Milestone 8 — TCP server + client
 - [ ] Milestone 9 — Concurrency — handle multiple clients simultaneously

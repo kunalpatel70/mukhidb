@@ -329,3 +329,131 @@ fn many_rows_stress() {
     assert!(out.contains("(200 rows)"));
     let _ = fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn transaction_commit() {
+    let dir = tmpdir("txn_commit");
+    let out = run_in_dir(
+        &dir,
+        "CREATE TABLE t (id INTEGER, name TEXT)\n\
+         BEGIN\n\
+         INSERT INTO t VALUES (1, 'Alice')\n\
+         INSERT INTO t VALUES (2, 'Bob')\n\
+         COMMIT\n\
+         SELECT * FROM t\n\
+         .exit\n",
+    );
+    assert!(out.contains("Transaction started."));
+    assert!(out.contains("Transaction committed."));
+    assert!(out.contains("Alice"));
+    assert!(out.contains("Bob"));
+    assert!(out.contains("(2 rows)"));
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn transaction_rollback() {
+    let dir = tmpdir("txn_rollback");
+    let out = run_in_dir(
+        &dir,
+        "CREATE TABLE t (id INTEGER, name TEXT)\n\
+         INSERT INTO t VALUES (1, 'Alice')\n\
+         BEGIN\n\
+         INSERT INTO t VALUES (2, 'Bob')\n\
+         INSERT INTO t VALUES (3, 'Charlie')\n\
+         ROLLBACK\n\
+         SELECT * FROM t\n\
+         .exit\n",
+    );
+    assert!(out.contains("Transaction rolled back."));
+    assert!(out.contains("Alice"));
+    assert!(!out.contains("Bob"));
+    assert!(!out.contains("Charlie"));
+    assert!(out.contains("(1 row)"));
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn transaction_rollback_persists_prior_data() {
+    let dir = tmpdir("txn_rollback_persist");
+    // Insert, commit implicitly, then rollback a second batch — first insert survives restart.
+    run_in_dir(
+        &dir,
+        "CREATE TABLE t (id INTEGER, name TEXT)\n\
+         INSERT INTO t VALUES (1, 'Kept')\n\
+         BEGIN\n\
+         INSERT INTO t VALUES (2, 'Gone')\n\
+         ROLLBACK\n\
+         .exit\n",
+    );
+    let out = run_in_dir(
+        &dir,
+        "SELECT * FROM t\n\
+         .exit\n",
+    );
+    assert!(out.contains("Kept"));
+    assert!(!out.contains("Gone"));
+    assert!(out.contains("(1 row)"));
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn commit_persists_across_restart() {
+    let dir = tmpdir("txn_commit_persist");
+    run_in_dir(
+        &dir,
+        "CREATE TABLE t (id INTEGER, name TEXT)\n\
+         BEGIN\n\
+         INSERT INTO t VALUES (1, 'Alice')\n\
+         COMMIT\n\
+         .exit\n",
+    );
+    let out = run_in_dir(
+        &dir,
+        "SELECT * FROM t\n\
+         .exit\n",
+    );
+    assert!(out.contains("Alice"));
+    assert!(out.contains("(1 row)"));
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn double_begin_error() {
+    let dir = tmpdir("txn_double_begin");
+    let out = run_in_dir(
+        &dir,
+        "CREATE TABLE t (id INTEGER)\n\
+         BEGIN\n\
+         BEGIN\n\
+         .exit\n",
+    );
+    assert!(out.contains("Already in a transaction"));
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn commit_without_begin_error() {
+    let dir = tmpdir("txn_no_begin_commit");
+    let out = run_in_dir(
+        &dir,
+        "CREATE TABLE t (id INTEGER)\n\
+         COMMIT\n\
+         .exit\n",
+    );
+    assert!(out.contains("No active transaction"));
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn rollback_without_begin_error() {
+    let dir = tmpdir("txn_no_begin_rollback");
+    let out = run_in_dir(
+        &dir,
+        "CREATE TABLE t (id INTEGER)\n\
+         ROLLBACK\n\
+         .exit\n",
+    );
+    assert!(out.contains("No active transaction"));
+    let _ = fs::remove_dir_all(&dir);
+}

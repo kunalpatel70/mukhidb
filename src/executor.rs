@@ -36,6 +36,21 @@ pub fn execute(statement: Statement, storage: &mut Storage) -> ExecuteResult {
         Statement::Unknown(cmd) => {
             ExecuteResult::Message(format!("Unrecognised command: '{}'", cmd))
         }
+
+        Statement::Begin => match storage.begin() {
+            Ok(_) => ExecuteResult::Message("Transaction started.".to_string()),
+            Err(e) => ExecuteResult::Message(format!("Error: {}", e)),
+        },
+
+        Statement::Commit => match storage.commit() {
+            Ok(_) => ExecuteResult::Message("Transaction committed.".to_string()),
+            Err(e) => ExecuteResult::Message(format!("Error: {}", e)),
+        },
+
+        Statement::Rollback => match storage.rollback() {
+            Ok(_) => ExecuteResult::Message("Transaction rolled back.".to_string()),
+            Err(e) => ExecuteResult::Message(format!("Error: {}", e)),
+        },
     }
 }
 
