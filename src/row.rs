@@ -1,22 +1,19 @@
 use crate::types::{Column, DataType, Row, Value};
 
-const TEXT_MAX: usize = 252;
-const TEXT_SLOT: usize = 4 + TEXT_MAX; // 256 bytes per TEXT column
-
-/// Byte size of a single column value on disk.
-fn col_size(dt: &DataType) -> usize {
-    match dt {
-        DataType::Integer => 8,
-        DataType::Text => TEXT_SLOT,
+/// Compute the serialized byte size of a specific row.
+pub fn serialized_size(row: &Row, columns: &[Column]) -> usize {
+    let mut size = 0;
+    for (col, val) in columns.iter().zip(row.values.iter()) {
+        size += match (&col.data_type, val) {
+            (DataType::Integer, _) => 8,
+            (DataType::Text, Value::Text(s)) => 4 + s.len(),
+            (DataType::Text, _) => 4, // empty text for type mismatch / Null
+        };
     }
+    size
 }
 
-/// Total byte size of a serialized row for the given schema.
-pub fn row_size(columns: &[Column]) -> usize {
-    columns.iter().map(|c| col_size(&c.data_type)).sum()
-}
-
-/// Serialize a Row into buf (must be at least row_size bytes).
+/// Serialize a Row into buf (must be at least serialized_size bytes).
 pub fn serialize(row: &Row, columns: &[Column], buf: &mut [u8]) {
     let mut offset = 0;
     for (col, val) in columns.iter().zip(row.values.iter()) {
@@ -27,18 +24,18 @@ pub fn serialize(row: &Row, columns: &[Column], buf: &mut [u8]) {
             }
             (DataType::Text, Value::Text(s)) => {
                 let bytes = s.as_bytes();
-                let len = bytes.len().min(TEXT_MAX);
+                let len = bytes.len();
                 buf[offset..offset + 4].copy_from_slice(&(len as u32).to_le_bytes());
-                buf[offset + 4..offset + 4 + len].copy_from_slice(&bytes[..len]);
-                // zero-fill remainder
-                for b in &mut buf[offset + 4 + len..offset + TEXT_SLOT] {
-                    *b = 0;
-                }
-                offset += TEXT_SLOT;
+                offset += 4;
+                buf[offset..offset + len].copy_from_slice(bytes);
+                offset += len;
             }
             _ => {
-                // zero-fill for type mismatch / Null
-                let sz = col_size(&col.data_type);
+                // Zero-fill for type mismatch / Null.
+                let sz = match col.data_type {
+                    DataType::Integer => 8,
+                    DataType::Text => 4, // just a zero-length prefix
+                };
                 for b in &mut buf[offset..offset + sz] {
                     *b = 0;
                 }
@@ -60,11 +57,12 @@ pub fn deserialize(buf: &[u8], columns: &[Column]) -> Row {
                 offset += 8;
             }
             DataType::Text => {
-                let len = u32::from_le_bytes(buf[offset..offset + 4].try_into().unwrap()) as usize;
-                let len = len.min(TEXT_MAX);
-                let s = String::from_utf8_lossy(&buf[offset + 4..offset + 4 + len]).to_string();
+                let len =
+                    u32::from_le_bytes(buf[offset..offset + 4].try_into().unwrap()) as usize;
+                offset += 4;
+                let s = String::from_utf8_lossy(&buf[offset..offset + len]).to_string();
                 values.push(Value::Text(s));
-                offset += TEXT_SLOT;
+                offset += len;
             }
         }
     }
@@ -84,11 +82,58 @@ mod tests {
         let row = Row {
             values: vec![Value::Integer(42), Value::Text("Alice".into())],
         };
-        let size = row_size(&cols);
+        let size = serialized_size(&row, &cols);
+        assert_eq!(size, 8 + 4 + 5); // i64 + len_prefix + "Alice"
         let mut buf = vec![0u8; size];
         serialize(&row, &cols, &mut buf);
         let out = deserialize(&buf, &cols);
         assert_eq!(out.values[0], Value::Integer(42));
         assert_eq!(out.values[1], Value::Text("Alice".into()));
+    }
+
+    #[test]
+    fn variable_sizes() {
+        let cols = vec![
+            Column { name: "id".into(), data_type: DataType::Integer },
+            Column { name: "bio".into(), data_type: DataType::Text },
+        ];
+        // Short text
+        let short = Row {
+            values: vec![Value::Integer(1), Value::Text("Hi".into())],
+        };
+        assert_eq!(serialized_size(&short, &cols), 8 + 4 + 2);
+
+        // Long text
+        let long_text = "x".repeat(1000);
+        let long = Row {
+            values: vec![Value::Integer(2), Value::Text(long_text.clone())],
+        };
+        assert_eq!(serialized_size(&long, &cols), 8 + 4 + 1000);
+
+        // Round-trip both
+        for row in [&short, &long] {
+            let size = serialized_size(row, &cols);
+            let mut buf = vec![0u8; size];
+            serialize(row, &cols, &mut buf);
+            let out = deserialize(&buf, &cols);
+            assert_eq!(out.values, row.values);
+        }
+    }
+
+    #[test]
+    fn empty_text() {
+        let cols = vec![
+            Column { name: "id".into(), data_type: DataType::Integer },
+            Column { name: "name".into(), data_type: DataType::Text },
+        ];
+        let row = Row {
+            values: vec![Value::Integer(1), Value::Text(String::new())],
+        };
+        let size = serialized_size(&row, &cols);
+        assert_eq!(size, 8 + 4); // i64 + len_prefix(0)
+        let mut buf = vec![0u8; size];
+        serialize(&row, &cols, &mut buf);
+        let out = deserialize(&buf, &cols);
+        assert_eq!(out.values[1], Value::Text(String::new()));
     }
 }

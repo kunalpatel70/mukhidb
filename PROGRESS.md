@@ -312,3 +312,147 @@ Crash at any point is safe:
 ### What's next
 
 - Milestone 7: Variable-size rows (overflow pages / slot-based layout)
+
+
+---
+
+## Milestone 7 — Variable-Size Rows (Slotted Pages)
+
+**Goal:** Replace the fixed-size row layout (where every TEXT column wastes 256 bytes) with a variable-length encoding and slotted page storage, dramatically improving space efficiency and removing the 252-byte TEXT cap.
+
+### The problem
+
+Previously, every TEXT column was serialized as a 256-byte fixed slot (4-byte length prefix + 252 bytes content, zero-padded). A 5-character name like "Alice" occupied 256 bytes — 98% wasted. TEXT was hard-capped at 252 bytes. A table (id INTEGER, name TEXT) fit only 15 rows per 4KB leaf page.
+
+### What was built
+
+-  — Replaced fixed-size TEXT encoding with variable-length:
+  - Old:  = 256 bytes always
+  - New:  = 4 + actual length
+  - Added  to compute per-row byte size
+  - Removed the schema-level  function (no longer meaningful)
+
+-  — Replaced flat fixed-cell leaf array with a **slotted page** layout:
+  - **Header (11 bytes):** node_type + num_cells + next_leaf + data_start
+  - **Slot directory:** grows forward from byte 11; each slot is 4 bytes (offset: u16, length: u16)
+  - **Data area:** cells packed from the end of the page backward
+  - Each cell: 
+  - Free space = data_start - (header + num_slots x 4)
+  - Insert checks free space rather than cell count
+  - Split divides cells by total bytes (~50/50) rather than by count
+  -  and  no longer need a  parameter — each slot carries its own length
+  - Internal nodes are unchanged (they store only keys + child pointers)
+
+-  — Updated to use the new APIs:
+  - Removed  from  and  call paths
+  - Added max-row-size guard on INSERT: rejects rows exceeding ~2KB (ensures at least 2 cells fit per leaf, required for splits)
+
+### Space efficiency improvement
+
+For a table (id INTEGER, name TEXT) with typical 5-character names:
+
+| Metric | Before (fixed) | After (slotted) |
+|--------|----------------|-----------------|
+| Row size on disk | 264 bytes | 17 bytes |
+| Rows per leaf | 15 | ~140 |
+| TEXT capacity | 252 bytes | ~2,000 bytes |
+
+### Key decisions
+
+- **Slotted pages, not overflow pages** — handles the common case (short-to-medium strings) efficiently. Overflow pages deferred to a future milestone if truly unbounded text is needed.
+- **Split by bytes, not count** — when a leaf is full, the split finds the point that divides total cell bytes roughly 50/50, giving balanced pages even with mixed-size rows.
+- **u16 offsets in slots** — sufficient for 4KB pages (max offset 4095). Would need upgrading if page size ever exceeds 64KB.
+- **Max cell size guard** — a single row cannot exceed half the usable page space (~2,030 bytes of row data). This guarantees every leaf can hold at least 2 cells, which is required for B+Tree splits to work.
+
+### Tests
+
+- 3 updated unit tests in : round-trip, variable sizes (short + 1000-char), empty text
+- 10 unit tests in : small insert, splits, reverse order, duplicates, single row, empty tree, negative keys, persistence round-trip, variable-size rows, 500-row stress
+- 4 new integration tests: long text (500 chars), mixed-length texts, long text persistence across restart, 100-row variable-text stress test
+- All 43 pre-existing tests continue to pass
+
+### Breaking change
+
+The on-disk leaf page format changed from fixed-cell array to slotted pages. Existing .db files from Milestone 6 are incompatible and must be deleted before running the new code.
+
+### Known limitations
+
+- **No overflow pages** — single rows are capped at ~2KB. A blog post or long description won't fit. Overflow pages would remove this limit.
+- **No compaction** — deleted rows (if DELETE existed) would leave holes in the data area. A page compaction / defragmentation step would reclaim space.
+- **No DELETE or UPDATE** — still not implemented.
+
+### What's next
+
+- Milestone 8: TCP server + client
+
+
+---
+
+## Milestone 7 — Variable-Size Rows (Slotted Pages)
+
+**Goal:** Replace the fixed-size row layout (where every TEXT column wastes 256 bytes) with a variable-length encoding and slotted page storage, dramatically improving space efficiency and removing the 252-byte TEXT cap.
+
+### The problem
+
+Previously, every TEXT column was serialized as a 256-byte fixed slot (4-byte length prefix + 252 bytes content, zero-padded). A 5-character name like "Alice" occupied 256 bytes — 98% wasted. TEXT was hard-capped at 252 bytes. A table (id INTEGER, name TEXT) fit only 15 rows per 4KB leaf page.
+
+### What was built
+
+- row.rs — Replaced fixed-size TEXT encoding with variable-length:
+  - Old: [len: u32][content: 252 bytes, zero-padded] = 256 bytes always
+  - New: [len: u32][content: len bytes] = 4 + actual length
+  - Added serialized_size(row, columns) to compute per-row byte size
+  - Removed the schema-level row_size(columns) function (no longer meaningful)
+
+- btree.rs — Replaced flat fixed-cell leaf array with a **slotted page** layout:
+  - **Header (11 bytes):** node_type + num_cells + next_leaf + data_start
+  - **Slot directory:** grows forward from byte 11; each slot is 4 bytes (offset: u16, length: u16)
+  - **Data area:** cells packed from the end of the page backward
+  - Each cell: [key: i64][row_data: variable bytes]
+  - Free space = data_start - (header + num_slots x 4)
+  - Insert checks free space rather than cell count
+  - Split divides cells by total bytes (~50/50) rather than by count
+  - scan_all and dump_tree no longer need a row_size parameter — each slot carries its own length
+  - Internal nodes are unchanged (they store only keys + child pointers)
+
+- storage.rs — Updated to use the new APIs:
+  - Removed row_size from select_all and dump_btree call paths
+  - Added max-row-size guard on INSERT: rejects rows exceeding ~2KB (ensures at least 2 cells fit per leaf, required for splits)
+
+### Space efficiency improvement
+
+For a table (id INTEGER, name TEXT) with typical 5-character names:
+
+| Metric | Before (fixed) | After (slotted) |
+|--------|----------------|-----------------|
+| Row size on disk | 264 bytes | 17 bytes |
+| Rows per leaf | 15 | ~140 |
+| TEXT capacity | 252 bytes | ~2,000 bytes |
+
+### Key decisions
+
+- **Slotted pages, not overflow pages** — handles the common case (short-to-medium strings) efficiently. Overflow pages deferred to a future milestone if truly unbounded text is needed.
+- **Split by bytes, not count** — when a leaf is full, the split finds the point that divides total cell bytes roughly 50/50, giving balanced pages even with mixed-size rows.
+- **u16 offsets in slots** — sufficient for 4KB pages (max offset 4095). Would need upgrading if page size ever exceeds 64KB.
+- **Max cell size guard** — a single row cannot exceed half the usable page space (~2,030 bytes of row data). This guarantees every leaf can hold at least 2 cells, which is required for B+Tree splits to work.
+
+### Tests
+
+- 3 updated unit tests in row.rs: round-trip, variable sizes (short + 1000-char), empty text
+- 10 unit tests in btree.rs: small insert, splits, reverse order, duplicates, single row, empty tree, negative keys, persistence round-trip, variable-size rows, 500-row stress
+- 4 new integration tests: long text (500 chars), mixed-length texts, long text persistence across restart, 100-row variable-text stress test
+- All 43 pre-existing tests continue to pass
+
+### Breaking change
+
+The on-disk leaf page format changed from fixed-cell array to slotted pages. Existing .db files from Milestone 6 are incompatible and must be deleted before running the new code.
+
+### Known limitations
+
+- **No overflow pages** — single rows are capped at ~2KB. A blog post or long description won't fit. Overflow pages would remove this limit.
+- **No compaction** — deleted rows (if DELETE existed) would leave holes in the data area. A page compaction / defragmentation step would reclaim space.
+- **No DELETE or UPDATE** — still not implemented.
+
+### What's next
+
+- Milestone 8: TCP server + client

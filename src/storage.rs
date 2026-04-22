@@ -88,7 +88,7 @@ impl Storage {
 
     pub fn create_table(&mut self, name: String, columns: Vec<Column>) -> Result<(), String> {
         if self.tables.contains_key(&name) {
-            return Err(format!("Table '{}' already exists.", name));
+            return Err(format!("Table '\''{}'\'' already exists.", name));
         }
         let path = format!("{}.db", name);
         let mut pager = Pager::open(&path)?;
@@ -115,7 +115,7 @@ impl Storage {
         let store = self
             .tables
             .get_mut(table_name)
-            .ok_or_else(|| format!("Table '{}' not found.", table_name))?;
+            .ok_or_else(|| format!("Table '\''{}'\'' not found.", table_name))?;
 
         if values.len() != store.columns.len() {
             return Err(format!(
@@ -132,7 +132,7 @@ impl Storage {
                 (DataType::Text, Value::Text(_)) => {}
                 _ => {
                     return Err(format!(
-                        "Column '{}' (position {}) expects {:?}, got {:?}.",
+                        "Column '\''{}'\'' (position {}) expects {:?}, got {:?}.",
                         col.name, i, col.data_type, val
                     ))
                 }
@@ -143,9 +143,19 @@ impl Storage {
         let key = extract_key(&store.columns, &values)?;
 
         // Serialize the row.
-        let rsize = row::row_size(&store.columns);
-        let mut buf = vec![0u8; rsize];
         let r = Row { values };
+        let rsize = row::serialized_size(&r, &store.columns);
+
+        // Check row size limit.
+        let max = btree::max_row_data_size();
+        if rsize > max {
+            return Err(format!(
+                "Row too large ({} bytes). Maximum row size is {} bytes.",
+                rsize, max
+            ));
+        }
+
+        let mut buf = vec![0u8; rsize];
         row::serialize(&r, &store.columns, &mut buf);
 
         // B+Tree insert.
@@ -164,10 +174,9 @@ impl Storage {
         let store = self
             .tables
             .get_mut(table_name)
-            .ok_or_else(|| format!("Table '{}' not found.", table_name))?;
+            .ok_or_else(|| format!("Table '\''{}'\'' not found.", table_name))?;
 
-        let rsize = row::row_size(&store.columns);
-        let raw_rows = btree::scan_all(&mut store.pager, store.root_page, rsize)?;
+        let raw_rows = btree::scan_all(&mut store.pager, store.root_page)?;
 
         let headers: Vec<String> = store.columns.iter().map(|c| c.name.clone()).collect();
         let rows: Vec<Row> = raw_rows
@@ -218,9 +227,8 @@ impl Storage {
         let store = self
             .tables
             .get_mut(table_name)
-            .ok_or_else(|| format!("Table '{}' not found.", table_name))?;
-        let rsize = row::row_size(&store.columns);
-        btree::dump_tree(&mut store.pager, store.root_page, rsize, 0)
+            .ok_or_else(|| format!("Table '\''{}'\'' not found.", table_name))?;
+        btree::dump_tree(&mut store.pager, store.root_page, 0)
     }
 }
 

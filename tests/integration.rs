@@ -457,3 +457,80 @@ fn rollback_without_begin_error() {
     assert!(out.contains("No active transaction"));
     let _ = fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn long_text_value() {
+    let dir = tmpdir("long_text");
+    let long = "x".repeat(500);
+    let input = format!(
+        "CREATE TABLE t (id INTEGER, bio TEXT)\n\
+         INSERT INTO t VALUES (1, '{}')\n\
+         SELECT * FROM t\n\
+         .exit\n",
+        long
+    );
+    let out = run_in_dir(&dir, &input);
+    assert!(out.contains(&long));
+    assert!(out.contains("(1 row)"));
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn mixed_length_texts() {
+    let dir = tmpdir("mixed_text");
+    let short = "Hi";
+    let medium = "a]".repeat(50);
+    let long = "z".repeat(300);
+    let input = format!(
+        "CREATE TABLE t (id INTEGER, msg TEXT)\n\
+         INSERT INTO t VALUES (1, '{}')\n\
+         INSERT INTO t VALUES (2, '{}')\n\
+         INSERT INTO t VALUES (3, '{}')\n\
+         SELECT * FROM t\n\
+         .exit\n",
+        short, medium, long
+    );
+    let out = run_in_dir(&dir, &input);
+    assert!(out.contains(short));
+    assert!(out.contains(&medium));
+    assert!(out.contains(&long));
+    assert!(out.contains("(3 rows)"));
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn long_text_persists_across_restart() {
+    let dir = tmpdir("long_text_persist");
+    let long = "persistence_test_".repeat(30);
+    let input = format!(
+        "CREATE TABLE t (id INTEGER, data TEXT)\n\
+         INSERT INTO t VALUES (1, '{}')\n\
+         .exit\n",
+        long
+    );
+    run_in_dir(&dir, &input);
+
+    let out = run_in_dir(
+        &dir,
+        "SELECT * FROM t\n\
+         .exit\n",
+    );
+    assert!(out.contains(&long));
+    assert!(out.contains("(1 row)"));
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn many_rows_with_variable_text() {
+    let dir = tmpdir("var_stress");
+    let mut input = String::from("CREATE TABLE t (id INTEGER, name TEXT)\n");
+    for i in 0..100 {
+        // Vary text lengths: some short, some long
+        let text = "a".repeat((i % 50) + 1);
+        input.push_str(&format!("INSERT INTO t VALUES ({}, '{}')\n", i, text));
+    }
+    input.push_str("SELECT * FROM t\n.exit\n");
+    let out = run_in_dir(&dir, &input);
+    assert!(out.contains("(100 rows)"));
+    let _ = fs::remove_dir_all(&dir);
+}
