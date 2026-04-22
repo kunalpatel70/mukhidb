@@ -5,7 +5,7 @@ how databases work from the ground up.
 
 ## Status
 
-🟢 Milestone 6 complete: Transactions + Write-Ahead Log
+🟢 Milestone 7 complete: Variable-size rows (slotted pages)
 
 See [PROGRESS.md](PROGRESS.md) for the full build log.
 
@@ -93,7 +93,7 @@ mukhidb> .exit
 - [x] Milestone 4 — WHERE clause filtering (`=`, `>`, `<`)
 - [x] Milestone 5 — Multiple tables + INNER JOIN
 - [x] Milestone 6 — Transactions + Write-Ahead Log
-- [ ] Milestone 7 — Variable-size rows (overflow pages / slot-based layout)
+- [x] Milestone 7 — Variable-size rows (slotted pages)
 - [ ] Milestone 8 — TCP server + client
 - [ ] Milestone 9 — Concurrency — handle multiple clients simultaneously
 
