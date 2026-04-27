@@ -456,3 +456,82 @@ The on-disk leaf page format changed from fixed-cell array to slotted pages. Exi
 ### What's next
 
 - Milestone 8: TCP server + client
+
+---
+
+## Milestone 8 — TCP Server + Client
+
+**Goal:** Turn mukhidb from a single-process REPL into a client-server database. The server owns storage and listens on TCP; clients connect, send SQL, receive results.
+
+### What was built
+
+- `protocol.rs` — Length-prefixed typed wire protocol:
+  - Frame format: `[length: u32 LE][type: u8][payload]`
+  - Four message types: `Query` (client → server), `Ok` / `Error` / `Rows` (server → client)
+  - `Rows` payload serializes headers and row cells as length-prefixed UTF-8 strings
+  - `read_message` / `write_message` handle framing; `read_exact` under the hood prevents short-read bugs
+
+- `server.rs` — Single-client TCP server:
+  - Binds to a host/port, owns one `Storage` instance
+  - Loads existing `.db` files on startup (same as REPL)
+  - Accepts one client at a time (M9 will add concurrency)
+  - Per session: loop `read_message` → dispatch → `write_message` until client disconnects
+  - Special-cases `.btree <table>` as a server-side meta-command (needs storage access)
+
+- `client.rs` — Interactive TCP client:
+  - Connects to a server, presents a REPL identical in UX to the local REPL
+  - Client-side meta-commands (`.exit`, `.help`) handled locally; everything else goes over the wire
+  - Pretty-prints `Rows` responses, displays `Ok` / `Error` messages directly
+
+- `main.rs` — Subcommand dispatch:
+  - `mukhidb repl` (default) — local REPL, no network
+  - `mukhidb server [--port N]` — TCP server (default port 4567)
+  - `mukhidb connect [--host H] [--port N]` — TCP client
+
+### Three running modes
+
+1. **`mukhidb repl`** — original single-process mode preserved for offline work
+2. **`mukhidb server`** — server process owning storage
+3. **`mukhidb connect`** — REPL-like client that talks to the server
+
+### Key decisions
+
+- **Length-prefixed typed protocol** — mini-PostgreSQL shape. Clear error channel (`Ok` vs `Error` vs `Rows`) rather than string-sniffing. Extensible for future milestones.
+- **Single binary, subcommands** — one build artifact, matches common CLI conventions (`git clone`, `cargo build`). Default to `repl` preserves the single-process UX.
+- **One client at a time** — deliberate M8 scope. Keeps the storage layer unchanged (no locking, no Arc/Mutex). M9 adds concurrency.
+- **`.btree` is server-side** — it needs access to the storage's pager. Sent over the wire as a normal `Query` message; server dispatches it specially.
+- **Keep the local REPL** — zero regression risk. All 47 pre-milestone tests continue to work unchanged.
+
+### Wire protocol specification
+
+```
+Frame layout:
+  [length: u32 LE (4 bytes)] [type: u8 (1 byte)] [payload: length-1 bytes]
+
+Message types:
+  0x01  Query   — client → server, payload = UTF-8 SQL
+  0x02  Ok      — server → client, payload = UTF-8 success message
+  0x03  Error   — server → client, payload = UTF-8 error
+  0x04  Rows    — server → client, payload:
+                  [num_cols: u32][for each col: [len: u32][name bytes]]
+                  [num_rows: u32][for each row: [for each cell: [len: u32][cell bytes]]]
+```
+
+### Tests
+
+- 7 new unit tests in `protocol.rs`: query/ok/error/rows round-trip, empty rows, Unicode payload, multiple messages in one stream, unknown type tag errors
+- 6 new integration tests in `tests/net.rs`: basic query, error channel, transactions over TCP, sequential client sessions, `.btree` over wire, long text over wire
+- All 55 pre-existing tests continue to pass
+- Total: 61 tests passing
+
+### Known limitations
+
+- **One client at a time** — M9 will lift this. Today a second client will block on `accept` until the first disconnects.
+- **No authentication** — anyone who can reach the port can run queries.
+- **No TLS** — plain TCP only. Fine for localhost; unsuitable for public networks.
+- **No query cancellation** — once a query starts executing, the client can't interrupt it mid-flight.
+- **No connection keep-alive / timeouts** — idle connections stay open forever.
+
+### What's next
+
+- Milestone 9: Concurrency — handle multiple clients simultaneously

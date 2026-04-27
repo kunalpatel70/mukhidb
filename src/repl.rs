@@ -16,7 +16,7 @@ pub fn run() {
         }
     }
 
-    println!("mukhidb v0.3.0  |  Type .exit to quit, .help for hints.");
+    println!("mukhidb v0.4.0 (repl mode)  |  Type .exit to quit, .help for hints.");
 
     loop {
         print!("mukhidb> ");

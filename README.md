@@ -5,19 +5,19 @@ how databases work from the ground up.
 
 ## Status
 
-🟢 Milestone 7 complete: Variable-size rows (slotted pages)
+🟢 Milestone 8 complete: TCP server + client
 
 See [PROGRESS.md](PROGRESS.md) for the full build log.
 
 ## Architecture
 
 ```
-                        ┌─────────────────┐
-  SQL input ──────────▶ │      REPL       │
-                        │   (repl.rs)     │
-                        └────────┬────────┘
-                                 │ raw string
-                                 ▼
+  ┌─────────────┐ TCP  ┌─────────────┐
+  │   Client    │ ◄──► │   Server    │  (or local REPL — same executor)
+  │(client.rs)  │      │(server.rs)  │
+  └─────────────┘      └──────┬──────┘
+                              │ raw string
+                              ▼
                         ┌─────────────────┐
                         │     Parser      │
                         │  (parser.rs)    │
@@ -63,7 +63,23 @@ See [PROGRESS.md](PROGRESS.md) for the full build log.
 ```bash
 git clone https://github.com/kunalpatel70/mukhidb
 cd mukhidb
-cargo run
+cargo build --release
+```
+
+### Three ways to run it
+
+**Local REPL (no network):**
+```bash
+mukhidb repl
+```
+
+**Client–server (two terminals):**
+```bash
+# Terminal 1 — start the server
+mukhidb server
+
+# Terminal 2 — connect a client
+mukhidb connect
 ```
 
 Then try:
@@ -94,7 +110,7 @@ mukhidb> .exit
 - [x] Milestone 5 — Multiple tables + INNER JOIN
 - [x] Milestone 6 — Transactions + Write-Ahead Log
 - [x] Milestone 7 — Variable-size rows (slotted pages)
-- [ ] Milestone 8 — TCP server + client
+- [x] Milestone 8 — TCP server + client
 - [ ] Milestone 9 — Concurrency — handle multiple clients simultaneously
 
 ## Learning Resources
