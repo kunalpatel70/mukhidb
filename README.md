@@ -149,6 +149,16 @@ What this means in practice:
 - [x] Milestone 8 — TCP server + client
 - [x] Milestone 9 — Concurrency — multi-client server with `Arc<RwLock<Storage>>`, transaction-owner gate, and parallel reads via interior-mutable page cache
 - [ ] Milestone 10 — MVCC — multi-writer transactions + snapshot isolation (no reader-writer blocking)
+- [ ] Milestone 11 — Secondary indexes (`CREATE INDEX`) — separate B+Tree per index, cost-based lookup
+- [ ] Milestone 12 — `DELETE` + `UPDATE` + page compaction — tombstones, in-place update, vacuum
+- [ ] Milestone 13 — Query planner + `EXPLAIN` — statistics, selectivity, plan nodes, join ordering
+- [ ] Milestone 14 — Richer SQL — projections, `GROUP BY`, `ORDER BY`, aggregates, compound `WHERE`, proper Pratt parser
+- [ ] Milestone 15 — Checksums + crash recovery hardening — CRC32C on pages, torn-write detection, kill-mid-operation test harness
+- [ ] Milestone 16 — Per-table locking — break free from the global `RwLock`, introduce 2PL + deadlock detection
+- [ ] Milestone 17 — Replication — single-leader async replicas via WAL shipping, reads from followers
+- [ ] Milestone 18 — Raft consensus — leader election, quorum writes, linearizable reads across 3+ nodes
+- [ ] Milestone 19 — Sharding — range / hash partitioning, scatter-gather queries, rebalancing
+- [ ] Milestone 20 — Distributed transactions — 2PC (and/or Calvin / deterministic ordering) across shards
 
 ## Learning Resources
 
