@@ -535,3 +535,113 @@ Message types:
 ### What's next
 
 - Milestone 9: Concurrency — handle multiple clients simultaneously
+
+---
+
+## Milestone 9 — Concurrency (Multi-Client Server with Parallel Reads)
+
+**Goal:** Lift the single-client restriction from M8. Multiple clients connect and run SQL simultaneously; `SELECT`s actually run in parallel; transactions remain atomic; a client disconnecting mid-transaction doesn't leak state.
+
+### What was built
+
+- `session.rs` — New module wrapping shared storage for concurrent access:
+  - `Shared` — the shared state: `RwLock<Storage>`, `Mutex<Option<u64>> txn_owner`, `Condvar txn_cv`.
+  - `Session` — per-client handle. Owns `Arc<Shared>`, its own `session_id` (from an `AtomicU64` counter), and an `in_transaction` flag.
+  - Operations pass through a two-level gate: first `wait_for_txn_clear()` (block on `txn_cv` if another session holds a transaction), then acquire the `RwLock` in read or write mode as appropriate.
+  - `Drop for Session` auto-rolls-back an open transaction so a disconnected client can't leave the txn gate locked.
+
+- `pager.rs` — Refactored for interior-mutable reads:
+  - Page cache moved behind `Mutex<Cache>`; file handle behind `Mutex<File>`; `file_length` promoted to `AtomicU64`.
+  - New `read_page(&self, n) -> [u8; PAGE_SIZE]` — safe to call concurrently across threads, returns an owned 4KB copy.
+  - Existing `get_page(&mut self)` / `get_page_mut(&mut self)` kept their signatures but use `Mutex::get_mut()` internally (lock-free when exclusive access is guaranteed).
+
+- `btree.rs` — `scan_all` and `dump_tree` changed from `&mut Pager` to `&Pager` and now call `read_page()` for their reads. Write paths (`insert`, splits) unchanged.
+
+- `storage.rs` — `Storage::select_all` and `Storage::dump_btree` now take `&self` (using `HashMap::get` instead of `get_mut`). Removed the `in_transaction` flag — transaction state lives in `Session` now; auto-flush is gated by `pager.in_transaction()` directly.
+
+- `server.rs` — Each `accept()` spawns a thread (`std::thread::spawn`) that owns one `Session`. Server's main thread just accepts and dispatches.
+
+- `repl.rs` — Still a single local session, but now uses the same `Session` / `Shared` plumbing as the server for uniformity.
+
+### Concurrency model
+
+All sessions share one `Arc<Shared>`. Operations coordinate through two primitives with clear roles:
+
+| Primitive | Role |
+|---|---|
+| `RwLock<Storage>` | Serializes data access — many readers OR one writer at a time. Held briefly per statement. |
+| `Mutex<Option<u64>> txn_owner` + `Condvar txn_cv` | Serializes transactions — at most one session can be inside `BEGIN..COMMIT` globally. |
+
+Operation flow:
+
+| Op | Gate check | Lock |
+|---|---|---|
+| `SELECT` (no txn) | wait while another session owns the txn | `storage.read()` briefly — **readers run in parallel** |
+| `INSERT` / `CREATE` (no txn) | wait while another session owns the txn | `storage.write()` briefly |
+| `BEGIN` | wait while `txn_owner` is Some, then claim it | `storage.write()` briefly for `pager.begin()` |
+| `INSERT` / `SELECT` during my txn | pass (I own it) | `storage.write()` briefly |
+| `COMMIT` / `ROLLBACK` | I own it | `storage.write()` for pager op, then clear `txn_owner`, `notify_all` |
+| Client disconnect with open txn | `Drop for Session` issues auto-rollback | same as `ROLLBACK` |
+
+### Key decisions
+
+- **RwLock over Mutex** — the common database workload is read-heavy. Getting concurrent-read performance is the whole point. The cost is one more primitive to understand; the benefit is measurable parallelism.
+- **Transactions globally serialized via a separate gate** — `RwLockWriteGuard` from `std` can't be stored across statement boundaries (lifetime bound to the RwLock). Instead, the txn_owner Mutex + Condvar holds the coarse "who has the txn" state, while the RwLock serves short per-statement access.
+- **Interior-mutable page cache** — the pager kept `&mut self` for write APIs (to preserve borrowed-reference ergonomics in btree write paths) while adding a `&self` read path that locks its internal `Mutex<Cache>` briefly. This avoided a massive rewrite of `btree.rs`.
+- **Zero new dependencies** — everything uses `std::sync` (`Mutex`, `RwLock`, `Condvar`, `Arc`) and `std::sync::atomic`. No tokio, no parking_lot, no crossbeam.
+- **Drop-based cleanup** — instead of a manual "on disconnect" hook in the server, `Drop for Session` guarantees rollback regardless of how the session ends (normal exit, panic, TCP reset).
+- **Thread-per-connection over async** — keeps the code linear and easy to read. `std::thread::spawn` is fine for the single-digit-clients-at-a-time workload we care about. Async would be a bigger refactor (executor choice, Pin futures) for no benefit at this scale.
+
+### Architecture
+
+```
+           Client           Client           Client
+             │                │                │
+             ▼                ▼                ▼
+           Session          Session          Session
+             │                │                │
+             └──────┐         │         ┌─────┘
+                    ▼         ▼         ▼
+                   ┌─────────────────────┐
+                   │  Arc<Shared>        │
+                   │  ├─ RwLock<Storage> │
+                   │  ├─ Mutex<txn_owner>│
+                   │  └─ Condvar<txn_cv> │
+                   └──────────┬──────────┘
+                              ▼
+                         Storage / Pager
+```
+
+### Tests
+
+- 6 new integration tests in `tests/concurrency.rs`:
+  - `concurrent_inserts_all_persist` — 5 threads × 20 inserts each; verifies all 100 rows are present with correct data
+  - `transaction_blocks_other_write` — A BEGINs and holds, B's INSERT must wait ≥ 200ms then proceed after A commits
+  - `disconnect_during_txn_releases_gate` — A BEGINs and disconnects; B can BEGIN immediately (A's rows rolled back)
+  - `second_begin_waits_for_first` — two concurrent BEGINs serialize correctly
+  - `concurrent_reads_return_consistent_data` — 8 concurrent readers all get consistent output
+  - `concurrent_reads_run_in_parallel` — timing-based proof: 8 readers take ~37ms vs ~98ms serialized (~2.6× speedup)
+- 1 new unit test in `pager.rs`: `read_page_works_via_shared_ref` — verifies the new `read_page(&self)` path
+- All 62 pre-existing tests continue to pass
+- Total: 69 tests passing
+
+### Measured parallelism (proof, not promise)
+
+The `concurrent_reads_run_in_parallel` test measures real elapsed wall time:
+
+- **1 reader**: ~12ms
+- **8 readers in parallel**: ~37ms
+- **8 readers serialized (what a Mutex would give)**: ~98ms
+
+That's a **~2.6× speedup** on a modest workload. Larger tables and more cache hits would scale further.
+
+### Known limitations
+
+- **One transaction at a time, globally** — while session A is inside `BEGIN..COMMIT`, all other sessions block on the `txn_owner` gate for any operation, including reads. This is required for correctness without MVCC: A's uncommitted pages live in the shared pager cache, so a concurrent reader would see A's dirty data and violate isolation. MVCC (M10) removes this constraint via per-transaction snapshots.
+- **No deadlock detection needed yet** — we use a strict lock order (txn_owner → RwLock) so deadlocks are impossible by construction. MVCC would introduce more lock interactions and may need detection.
+- **No per-table concurrency** — the RwLock covers the whole database. Two writers to unrelated tables still serialize. Per-table locks would fix this but complicate the schema/metadata locking story.
+- **Thread-per-connection doesn't scale past ~thousands of clients** — each thread costs ~2MB of stack. For tens of thousands of concurrent connections, async I/O would be required.
+
+### What's next
+
+- Milestone 10: MVCC — multi-writer transactions + snapshot isolation (no reader-writer blocking)

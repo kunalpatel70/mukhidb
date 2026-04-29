@@ -5,9 +5,9 @@ how databases work from the ground up.
 
 ## Status
 
-🟢 Milestone 8 complete: TCP server + client
+🟢 Milestone 9 complete: concurrent multi-client server with parallel reads
 
-See [PROGRESS.md](PROGRESS.md) for the full build log.
+See [PROGRESS.md](PROGRESS.md) for the full build log and [BACKLOG.md](BACKLOG.md) for known limitations and planned work.
 
 ## Architecture
 
@@ -24,20 +24,32 @@ See [PROGRESS.md](PROGRESS.md) for the full build log.
                         └────────┬────────┘
                                  │ Statement enum
                                  ▼
-                        ┌─────────────────┐
-                        │    Executor     │
-                        │ (executor.rs)   │
-                        └────────┬────────┘
-                                 │ storage API calls
+                         ┌─────────────────┐
+                         │    Executor     │
+                         │ (executor.rs)   │
+                         └────────┬────────┘
+                                 │ session API calls
                                  ▼
-                        ┌─────────────────┐
-                        │    Storage      │
-                        │  (storage.rs)   │
-                        │                 │
-                        │  TableStore per │
-                        │  table: schema  │
-                        │  + root page    │
-                        └────────┬────────┘
+                         ┌─────────────────────────┐
+                         │  Session (session.rs)   │
+                         │  per-client handle.     │
+                         │  Holds Arc<Shared>.     │
+                         │  Gates ops on txn_owner │
+                         │  + acquires RwLock.     │
+                         └────────────┬────────────┘
+                                     │
+                         ┌────────────▼────────────┐
+                         │  Shared: RwLock<Storage>│
+                         │        + txn_owner      │
+                         │        + txn_cv         │
+                         └────────────┬────────────┘
+                                     │
+                         ┌────────────▼────────────┐
+                         │        Storage          │
+                         │     (storage.rs)        │
+                         │  TableStore per table:  │
+                         │  schema + root page     │
+                        └────────┬────────────────┘
                                  │
                     ┌────────────┼────────────┐
                     ▼            ▼            ▼
@@ -101,6 +113,30 @@ mukhidb> .btree users
 mukhidb> .exit
 ```
 
+## Concurrency guarantees
+
+Multiple clients can connect simultaneously — the server spawns a thread per connection. Access to the shared database is coordinated by two primitives:
+
+- `RwLock<Storage>` — per-statement data access.
+- `txn_owner` Mutex + Condvar — at most one transaction active globally.
+
+Concretely, you can rely on:
+
+- **Multiple readers run in parallel.** A plain `SELECT` (outside a transaction) takes the RwLock in read mode. Many readers run concurrently; two threads scanning the same page briefly serialize on the pager's cache Mutex (microseconds per 4KB fetch), but all row processing runs fully in parallel. Measured: 8 concurrent readers ~2.6× faster than they would be with a plain Mutex.
+- **Writes serialize.** A non-transaction `INSERT` or `CREATE TABLE` takes the RwLock in write mode, so only one writer runs at a time and active readers finish first.
+- **Any open transaction blocks all other sessions.** `BEGIN` claims the `txn_owner` gate; every other session (reads and writes alike) waits on a Condvar until the transaction session calls `COMMIT` or `ROLLBACK` — or disconnects, which auto-rolls-back via `Drop`. This also applies to a purely read-only `BEGIN; SELECT; COMMIT` — it blocks others for the duration. Removing this coarse-grained locking is Milestone 10 (MVCC).
+- **No deadlocks by construction.** Strict lock order: always `txn_owner` first, then `RwLock<Storage>`. No cycles possible.
+
+What this means in practice:
+
+| Scenario | Blocked? |
+|---|---|
+| Two SELECTs, neither in a transaction | No — run in parallel |
+| SELECT while another session's INSERT is running | Yes — reader waits for writer briefly |
+| INSERT while other sessions are SELECTing | Yes — writer waits for readers to finish |
+| SELECT while another session is in BEGIN..COMMIT | Yes — blocked until that transaction ends |
+| Your own SELECT inside your own transaction | No (you already hold the txn gate) |
+
 ## Roadmap
 
 - [x] Milestone 1 — REPL + in-memory storage
@@ -111,7 +147,8 @@ mukhidb> .exit
 - [x] Milestone 6 — Transactions + Write-Ahead Log
 - [x] Milestone 7 — Variable-size rows (slotted pages)
 - [x] Milestone 8 — TCP server + client
-- [ ] Milestone 9 — Concurrency — handle multiple clients simultaneously
+- [x] Milestone 9 — Concurrency — multi-client server with `Arc<RwLock<Storage>>`, transaction-owner gate, and parallel reads via interior-mutable page cache
+- [ ] Milestone 10 — MVCC — multi-writer transactions + snapshot isolation (no reader-writer blocking)
 
 ## Learning Resources
 

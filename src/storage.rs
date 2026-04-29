@@ -67,12 +67,11 @@ pub struct TableStore {
 
 pub struct Storage {
     tables: HashMap<String, TableStore>,
-    in_transaction: bool,
 }
 
 impl Storage {
     pub fn new() -> Self {
-        Storage { tables: HashMap::new(), in_transaction: false }
+        Storage { tables: HashMap::new() }
     }
 
     /// Open an existing table from a .db file.
@@ -88,7 +87,7 @@ impl Storage {
 
     pub fn create_table(&mut self, name: String, columns: Vec<Column>) -> Result<(), String> {
         if self.tables.contains_key(&name) {
-            return Err(format!("Table '\''{}'\'' already exists.", name));
+            return Err(format!("Table '{}' already exists.", name));
         }
         let path = format!("{}.db", name);
         let mut pager = Pager::open(&path)?;
@@ -100,7 +99,7 @@ impl Storage {
         let root_page = btree::create_tree(&mut pager)?;
 
         write_metadata(&mut pager, root_page, &columns)?;
-        if !self.in_transaction {
+        if !pager.in_transaction() {
             pager.flush()?;
         }
 
@@ -115,7 +114,7 @@ impl Storage {
         let store = self
             .tables
             .get_mut(table_name)
-            .ok_or_else(|| format!("Table '\''{}'\'' not found.", table_name))?;
+            .ok_or_else(|| format!("Table '{}' not found.", table_name))?;
 
         if values.len() != store.columns.len() {
             return Err(format!(
@@ -132,7 +131,7 @@ impl Storage {
                 (DataType::Text, Value::Text(_)) => {}
                 _ => {
                     return Err(format!(
-                        "Column '\''{}'\'' (position {}) expects {:?}, got {:?}.",
+                        "Column '{}' (position {}) expects {:?}, got {:?}.",
                         col.name, i, col.data_type, val
                     ))
                 }
@@ -164,19 +163,19 @@ impl Storage {
             store.root_page = new_root;
             write_metadata(&mut store.pager, new_root, &store.columns)?;
         }
-        if !self.in_transaction {
+        if !store.pager.in_transaction() {
             store.pager.flush()?;
         }
         Ok(())
     }
 
-    pub fn select_all(&mut self, table_name: &str) -> Result<(Vec<String>, Vec<Row>), String> {
+    pub fn select_all(&self, table_name: &str) -> Result<(Vec<String>, Vec<Row>), String> {
         let store = self
             .tables
-            .get_mut(table_name)
-            .ok_or_else(|| format!("Table '\''{}'\'' not found.", table_name))?;
+            .get(table_name)
+            .ok_or_else(|| format!("Table '{}' not found.", table_name))?;
 
-        let raw_rows = btree::scan_all(&mut store.pager, store.root_page)?;
+        let raw_rows = btree::scan_all(&store.pager, store.root_page)?;
 
         let headers: Vec<String> = store.columns.iter().map(|c| c.name.clone()).collect();
         let rows: Vec<Row> = raw_rows
@@ -186,49 +185,39 @@ impl Storage {
         Ok((headers, rows))
     }
 
+    /// Start a transaction across all currently-open tables.
+    /// The Session layer ensures at most one transaction is active at a time.
     pub fn begin(&mut self) -> Result<(), String> {
-        if self.in_transaction {
-            return Err("Already in a transaction.".to_string());
-        }
         for store in self.tables.values_mut() {
             store.pager.begin()?;
         }
-        self.in_transaction = true;
         Ok(())
     }
 
     pub fn commit(&mut self) -> Result<(), String> {
-        if !self.in_transaction {
-            return Err("No active transaction.".to_string());
-        }
         for store in self.tables.values_mut() {
             store.pager.commit()?;
         }
-        self.in_transaction = false;
         Ok(())
     }
 
     pub fn rollback(&mut self) -> Result<(), String> {
-        if !self.in_transaction {
-            return Err("No active transaction.".to_string());
-        }
         for store in self.tables.values_mut() {
             store.pager.rollback()?;
             // Re-read root_page from metadata since dirty pages were discarded.
             let (root, _) = read_metadata(&mut store.pager)?;
             store.root_page = root;
         }
-        self.in_transaction = false;
         Ok(())
     }
 
     /// Dump the B+Tree structure for a table as a human-readable string.
-    pub fn dump_btree(&mut self, table_name: &str) -> Result<String, String> {
+    pub fn dump_btree(&self, table_name: &str) -> Result<String, String> {
         let store = self
             .tables
-            .get_mut(table_name)
-            .ok_or_else(|| format!("Table '\''{}'\'' not found.", table_name))?;
-        btree::dump_tree(&mut store.pager, store.root_page, 0)
+            .get(table_name)
+            .ok_or_else(|| format!("Table '{}' not found.", table_name))?;
+        btree::dump_tree(&store.pager, store.root_page, 0)
     }
 }
 

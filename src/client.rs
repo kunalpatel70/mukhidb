@@ -15,7 +15,7 @@ pub fn run(host: &str, port: u16) -> Result<(), String> {
     let mut reader = BufReader::new(read_stream);
     let mut writer = BufWriter::new(stream);
 
-    println!("mukhidb client v0.4.0  |  Connected to {}  |  .exit to quit, .help for hints.", addr);
+    println!("mukhidb client v0.5.0  |  Connected to {}  |  .exit to quit, .help for hints.", addr);
 
     loop {
         print!("mukhidb> ");

@@ -8,6 +8,7 @@ mod protocol;
 mod repl;
 mod row;
 mod server;
+mod session;
 mod storage;
 mod types;
 mod wal;
@@ -51,7 +52,7 @@ fn main() {
 }
 
 fn print_usage() {
-    println!("mukhidb v0.4.0");
+    println!("mukhidb v0.5.0");
     println!();
     println!("Usage:");
     println!("  mukhidb repl                         Local REPL (default, no network)");

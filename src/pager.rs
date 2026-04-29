@@ -1,18 +1,42 @@
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 
 use crate::wal::Wal;
 
 pub const PAGE_SIZE: usize = 4096;
 const MAX_PAGES: usize = 1024;
 
+/// Page cache + on-disk file, accessed by both the read path (via interior
+/// mutability) and the write path (via `&mut self`).
+///
+/// # Concurrency model
+///
+/// The Pager supports two access modes:
+///
+/// - **Read (`&self`)**: `read_page` acquires a short lock on `cache` to
+///   look up / populate the page cache, and on `file` to read from disk on
+///   cache miss. Returns an owned `[u8; PAGE_SIZE]` copy so the caller does
+///   not hold the lock.
+///
+/// - **Write (`&mut self`)**: `get_page` and `get_page_mut` bypass the mutex
+///   via `Mutex::get_mut()` since exclusive access is guaranteed by the
+///   caller. They return borrowed references as before.
+///
+/// The higher layers (Session → RwLock<Storage>) ensure read/write paths
+/// are never used simultaneously on the same Pager.
 pub struct Pager {
-    file: File,
-    file_length: u64,
-    pages: Vec<Option<[u8; PAGE_SIZE]>>,
-    dirty: Vec<bool>,
+    file: Mutex<File>,
+    file_length: AtomicU64,
+    cache: Mutex<Cache>,
     wal: Wal,
     in_transaction: bool,
+}
+
+struct Cache {
+    pages: Vec<Option<[u8; PAGE_SIZE]>>,
+    dirty: Vec<bool>,
 }
 
 impl Pager {
@@ -55,46 +79,102 @@ impl Pager {
         let file_length = file.metadata().map_err(|e| e.to_string())?.len();
 
         Ok(Pager {
-            file,
-            file_length,
-            pages: vec![None; MAX_PAGES],
-            dirty: vec![false; MAX_PAGES],
+            file: Mutex::new(file),
+            file_length: AtomicU64::new(file_length),
+            cache: Mutex::new(Cache {
+                pages: vec![None; MAX_PAGES],
+                dirty: vec![false; MAX_PAGES],
+            }),
             wal,
             in_transaction: false,
         })
     }
 
     pub fn num_pages(&self) -> u32 {
-        (self.file_length / PAGE_SIZE as u64) as u32
+        (self.file_length.load(Ordering::Acquire) / PAGE_SIZE as u64) as u32
     }
+
+    pub fn in_transaction(&self) -> bool {
+        self.in_transaction
+    }
+
+    // -------------------------------------------------------------------
+    // Read path — &self, interior-mutable.
+    // -------------------------------------------------------------------
+
+    /// Read a page by number. Returns an owned 4KB copy.
+    ///
+    /// Safe to call concurrently from multiple threads holding `&Pager`.
+    pub fn read_page(&self, page_num: u32) -> Result<[u8; PAGE_SIZE], String> {
+        let idx = page_num as usize;
+        if idx >= MAX_PAGES {
+            return Err(format!("Page {} exceeds max {}", page_num, MAX_PAGES));
+        }
+
+        // Fast path: cache hit.
+        {
+            let cache = self.cache.lock().expect("cache mutex poisoned");
+            if let Some(buf) = cache.pages[idx] {
+                return Ok(buf);
+            }
+        }
+
+        // Cache miss: read from disk (holding only the file lock briefly),
+        // then re-lock cache to insert. A concurrent reader may do the same
+        // work; both will produce the same bytes.
+        let mut buf = [0u8; PAGE_SIZE];
+        let file_len = self.file_length.load(Ordering::Acquire);
+        let page_end = (page_num as u64 + 1) * PAGE_SIZE as u64;
+        if page_end <= file_len {
+            let mut file = self.file.lock().expect("file mutex poisoned");
+            file.seek(SeekFrom::Start(page_num as u64 * PAGE_SIZE as u64))
+                .map_err(|e| e.to_string())?;
+            file.read_exact(&mut buf).map_err(|e| e.to_string())?;
+        }
+
+        let mut cache = self.cache.lock().expect("cache mutex poisoned");
+        cache.pages[idx] = Some(buf);
+        Ok(buf)
+    }
+
+    // -------------------------------------------------------------------
+    // Write path — &mut self, exclusive access.
+    // -------------------------------------------------------------------
 
     pub fn get_page(&mut self, page_num: u32) -> Result<&[u8; PAGE_SIZE], String> {
         let idx = page_num as usize;
         if idx >= MAX_PAGES {
             return Err(format!("Page {} exceeds max {}", page_num, MAX_PAGES));
         }
-        if self.pages[idx].is_none() {
+
+        // Populate the cache if this page isn't loaded.
+        let cache = self.cache.get_mut().expect("cache mutex poisoned");
+        if cache.pages[idx].is_none() {
             let mut buf = [0u8; PAGE_SIZE];
-            if page_num < self.num_pages() {
-                self.file
-                    .seek(SeekFrom::Start(page_num as u64 * PAGE_SIZE as u64))
+            let file_len = self.file_length.load(Ordering::Acquire);
+            let page_end = (page_num as u64 + 1) * PAGE_SIZE as u64;
+            if page_end <= file_len {
+                let file = self.file.get_mut().expect("file mutex poisoned");
+                file.seek(SeekFrom::Start(page_num as u64 * PAGE_SIZE as u64))
                     .map_err(|e| e.to_string())?;
-                self.file.read_exact(&mut buf).map_err(|e| e.to_string())?;
+                file.read_exact(&mut buf).map_err(|e| e.to_string())?;
             }
-            self.pages[idx] = Some(buf);
+            cache.pages[idx] = Some(buf);
         }
-        Ok(self.pages[idx].as_ref().unwrap())
+        Ok(cache.pages[idx].as_ref().unwrap())
     }
 
     pub fn get_page_mut(&mut self, page_num: u32) -> Result<&mut [u8; PAGE_SIZE], String> {
         self.get_page(page_num)?;
         let idx = page_num as usize;
-        self.dirty[idx] = true;
         let new_end = (page_num as u64 + 1) * PAGE_SIZE as u64;
-        if new_end > self.file_length {
-            self.file_length = new_end;
+        let cur_len = self.file_length.load(Ordering::Acquire);
+        if new_end > cur_len {
+            self.file_length.store(new_end, Ordering::Release);
         }
-        Ok(self.pages[idx].as_mut().unwrap())
+        let cache = self.cache.get_mut().expect("cache mutex poisoned");
+        cache.dirty[idx] = true;
+        Ok(cache.pages[idx].as_mut().unwrap())
     }
 
     pub fn allocate_page(&mut self) -> Result<u32, String> {
@@ -114,10 +194,11 @@ impl Pager {
 
     /// Commit: WAL-write dirty pages → fsync WAL → apply to .db → fsync .db → truncate WAL.
     pub fn commit(&mut self) -> Result<(), String> {
+        let cache = self.cache.get_mut().expect("cache mutex poisoned");
         // Write dirty pages to WAL.
         for i in 0..MAX_PAGES {
-            if self.dirty[i] {
-                if let Some(ref buf) = self.pages[i] {
+            if cache.dirty[i] {
+                if let Some(ref buf) = cache.pages[i] {
                     self.wal.append_page(i as u32, buf)?;
                 }
             }
@@ -125,21 +206,20 @@ impl Pager {
         self.wal.append_commit()?;
 
         // Apply dirty pages to the .db file.
+        let file = self.file.get_mut().expect("file mutex poisoned");
         for i in 0..MAX_PAGES {
-            if self.dirty[i] {
-                if let Some(ref buf) = self.pages[i] {
-                    self.file
-                        .seek(SeekFrom::Start(i as u64 * PAGE_SIZE as u64))
+            if cache.dirty[i] {
+                if let Some(ref buf) = cache.pages[i] {
+                    file.seek(SeekFrom::Start(i as u64 * PAGE_SIZE as u64))
                         .map_err(|e| e.to_string())?;
-                    self.file.write_all(buf).map_err(|e| e.to_string())?;
-                    self.dirty[i] = false;
+                    file.write_all(buf).map_err(|e| e.to_string())?;
+                    cache.dirty[i] = false;
                 }
             }
         }
-        self.file.flush().map_err(|e| e.to_string())?;
-        self.file.sync_all().map_err(|e| e.to_string())?;
+        file.flush().map_err(|e| e.to_string())?;
+        file.sync_all().map_err(|e| e.to_string())?;
 
-        // Truncate WAL — .db is durable now.
         self.wal.truncate()?;
         self.in_transaction = false;
         Ok(())
@@ -147,14 +227,17 @@ impl Pager {
 
     /// Rollback: discard dirty pages (reload from disk on next access).
     pub fn rollback(&mut self) -> Result<(), String> {
+        let cache = self.cache.get_mut().expect("cache mutex poisoned");
         for i in 0..MAX_PAGES {
-            if self.dirty[i] {
-                self.pages[i] = None;
-                self.dirty[i] = false;
+            if cache.dirty[i] {
+                cache.pages[i] = None;
+                cache.dirty[i] = false;
             }
         }
         // Recalculate file_length from actual file.
-        self.file_length = self.file.metadata().map_err(|e| e.to_string())?.len();
+        let file = self.file.get_mut().expect("file mutex poisoned");
+        let fl = file.metadata().map_err(|e| e.to_string())?.len();
+        self.file_length.store(fl, Ordering::Release);
         self.wal.truncate()?;
         self.in_transaction = false;
         Ok(())
@@ -214,6 +297,26 @@ mod tests {
 
         let page = p.get_page(0).unwrap();
         assert_eq!(page[0], 0xFF);
+
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn read_page_works_via_shared_ref() {
+        let path = "/tmp/mukhidb_pager_read_page.db";
+        let _ = fs::remove_file(path);
+        let _ = fs::remove_file(format!("{}.wal", path));
+
+        let mut p = Pager::open(path).unwrap();
+        let page = p.get_page_mut(0).unwrap();
+        page[0] = 0x11;
+        page[1] = 0x22;
+        p.flush().unwrap();
+
+        let pref: &Pager = &p;
+        let copy = pref.read_page(0).unwrap();
+        assert_eq!(copy[0], 0x11);
+        assert_eq!(copy[1], 0x22);
 
         fs::remove_file(path).unwrap();
     }

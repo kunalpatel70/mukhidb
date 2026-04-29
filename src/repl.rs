@@ -1,6 +1,7 @@
 use std::io::{self, Write};
 use crate::executor::{execute, ExecuteResult};
 use crate::parser::parse;
+use crate::session::{Session, Shared};
 use crate::storage::Storage;
 
 /// Start the REPL — reads SQL from stdin, executes it, prints results.
@@ -16,7 +17,10 @@ pub fn run() {
         }
     }
 
-    println!("mukhidb v0.4.0 (repl mode)  |  Type .exit to quit, .help for hints.");
+    let shared = Shared::new(storage);
+    let mut session = Session::new(shared);
+
+    println!("mukhidb v0.5.0 (repl mode)  |  Type .exit to quit, .help for hints.");
 
     loop {
         print!("mukhidb> ");
@@ -37,12 +41,12 @@ pub fn run() {
 
         // Meta-commands (start with '.')
         if input.starts_with('.') {
-            handle_meta(input, &mut storage);
+            handle_meta(input, &mut session);
             continue;
         }
 
         let statement = parse(input);
-        let result    = execute(statement, &mut storage);
+        let result    = execute(statement, &mut session);
 
         match result {
             ExecuteResult::Message(msg) => println!("{}", msg),
@@ -53,7 +57,7 @@ pub fn run() {
     println!("\nBye!");
 }
 
-fn handle_meta(cmd: &str, storage: &mut Storage) {
+fn handle_meta(cmd: &str, session: &mut Session) {
     match cmd {
         ".exit" | ".quit" => {
             println!("Bye!");
@@ -75,7 +79,7 @@ fn handle_meta(cmd: &str, storage: &mut Storage) {
             if table.is_empty() {
                 println!("Usage: .btree <table_name>");
             } else {
-                match storage.dump_btree(table) {
+                match session.dump_btree(table) {
                     Ok(tree) => println!("{}", tree),
                     Err(e) => println!("Error: {}", e),
                 }

@@ -284,32 +284,32 @@ pub fn insert(
 
 /// Scan all rows in key order by walking the leaf chain.
 /// Returns Vec of raw row byte vectors (variable length).
-pub fn scan_all(pager: &mut Pager, root_page: u32) -> Result<Vec<Vec<u8>>, String> {
+pub fn scan_all(pager: &Pager, root_page: u32) -> Result<Vec<Vec<u8>>, String> {
     // Walk to the leftmost leaf.
     let mut cur = root_page;
     loop {
-        let node_type = pager.get_page(cur)?[0];
+        let page = pager.read_page(cur)?;
+        let node_type = page[0];
         if node_type == NODE_TYPE_LEAF {
             break;
         }
-        let page = pager.get_page(cur)?;
-        let nk = internal_num_keys(page) as usize;
+        let nk = internal_num_keys(&page) as usize;
         cur = if nk > 0 {
-            internal_child(page, 0)
+            internal_child(&page, 0)
         } else {
-            internal_right_child(page)
+            internal_right_child(&page)
         };
     }
 
     // Walk the leaf chain via next_leaf pointers.
     let mut rows = Vec::new();
     loop {
-        let page = pager.get_page(cur)?;
-        let n = leaf_num_cells(page) as usize;
+        let page = pager.read_page(cur)?;
+        let n = leaf_num_cells(&page) as usize;
         for i in 0..n {
-            rows.push(leaf_cell_row(page, i).to_vec());
+            rows.push(leaf_cell_row(&page, i).to_vec());
         }
-        let next = leaf_next_leaf(page);
+        let next = leaf_next_leaf(&page);
         if next == 0 {
             break;
         }
@@ -573,35 +573,35 @@ fn split_internal(
 
 /// Dump the tree structure as a human-readable string for debugging.
 pub fn dump_tree(
-    pager: &mut Pager,
+    pager: &Pager,
     page_num: u32,
     depth: usize,
 ) -> Result<String, String> {
     let indent = "  ".repeat(depth);
-    let page = pager.get_page(page_num)?;
+    let page = pager.read_page(page_num)?;
     let node_type = page[0];
 
     if node_type == NODE_TYPE_LEAF {
-        let n = leaf_num_cells(page) as usize;
-        let next = leaf_next_leaf(page);
-        let free = leaf_free_space(page);
+        let n = leaf_num_cells(&page) as usize;
+        let next = leaf_next_leaf(&page);
+        let free = leaf_free_space(&page);
         let mut out = format!(
             "{}Leaf (page={}, cells={}, next={}, free={})",
             indent, page_num, n, next, free
         );
         for i in 0..n {
-            let k = leaf_cell_key(page, i);
+            let k = leaf_cell_key(&page, i);
             out.push_str(&format!("\n{}  - key {}", indent, k));
         }
         Ok(out)
     } else if node_type == NODE_TYPE_INTERNAL {
-        let nk = internal_num_keys(page) as usize;
-        let rc = internal_right_child(page);
+        let nk = internal_num_keys(&page) as usize;
+        let rc = internal_right_child(&page);
         let mut children: Vec<u32> = Vec::with_capacity(nk + 1);
         let mut keys: Vec<i64> = Vec::with_capacity(nk);
         for i in 0..nk {
-            children.push(internal_child(page, i));
-            keys.push(internal_key(page, i));
+            children.push(internal_child(&page, i));
+            keys.push(internal_key(&page, i));
         }
         children.push(rc);
 

@@ -1,5 +1,5 @@
 use crate::parser::Statement;
-use crate::storage::Storage;
+use crate::session::Session;
 use crate::types::{CompOp, Expr, JoinClause, Row, Value};
 
 /// The result of executing a statement — either a message or a table of rows.
@@ -8,18 +8,18 @@ pub enum ExecuteResult {
     Rows { headers: Vec<String>, rows: Vec<Vec<String>> },
 }
 
-/// Execute a parsed Statement against the Storage layer.
-pub fn execute(statement: Statement, storage: &mut Storage) -> ExecuteResult {
+/// Execute a parsed Statement against the Session.
+pub fn execute(statement: Statement, session: &mut Session) -> ExecuteResult {
     match statement {
         Statement::CreateTable { table_name, columns } => {
-            match storage.create_table(table_name.clone(), columns) {
+            match session.create_table(table_name.clone(), columns) {
                 Ok(_)    => ExecuteResult::Message(format!("Table '{}' created.", table_name)),
                 Err(msg) => ExecuteResult::Message(format!("Error: {}", msg)),
             }
         }
 
         Statement::Insert { table_name, values } => {
-            match storage.insert(&table_name, values) {
+            match session.insert(&table_name, values) {
                 Ok(_)    => ExecuteResult::Message("1 row inserted.".to_string()),
                 Err(msg) => ExecuteResult::Message(format!("Error: {}", msg)),
             }
@@ -27,9 +27,9 @@ pub fn execute(statement: Statement, storage: &mut Storage) -> ExecuteResult {
 
         Statement::Select { table_name, join, where_clause } => {
             if let Some(ref jc) = join {
-                execute_join(&table_name, jc, &where_clause, storage)
+                execute_join(&table_name, jc, &where_clause, session)
             } else {
-                execute_select(&table_name, &where_clause, storage)
+                execute_select(&table_name, &where_clause, session)
             }
         }
 
@@ -37,17 +37,17 @@ pub fn execute(statement: Statement, storage: &mut Storage) -> ExecuteResult {
             ExecuteResult::Message(format!("Unrecognised command: '{}'", cmd))
         }
 
-        Statement::Begin => match storage.begin() {
+        Statement::Begin => match session.begin() {
             Ok(_) => ExecuteResult::Message("Transaction started.".to_string()),
             Err(e) => ExecuteResult::Message(format!("Error: {}", e)),
         },
 
-        Statement::Commit => match storage.commit() {
+        Statement::Commit => match session.commit() {
             Ok(_) => ExecuteResult::Message("Transaction committed.".to_string()),
             Err(e) => ExecuteResult::Message(format!("Error: {}", e)),
         },
 
-        Statement::Rollback => match storage.rollback() {
+        Statement::Rollback => match session.rollback() {
             Ok(_) => ExecuteResult::Message("Transaction rolled back.".to_string()),
             Err(e) => ExecuteResult::Message(format!("Error: {}", e)),
         },
@@ -75,9 +75,9 @@ fn evaluate(expr: &Expr, row: &Row, headers: &[String]) -> bool {
 fn execute_select(
     table_name: &str,
     where_clause: &Option<Expr>,
-    storage: &mut Storage,
+    session: &mut Session,
 ) -> ExecuteResult {
-    match storage.select_all(table_name) {
+    match session.select_all(table_name) {
         Ok((headers, rows)) => {
             let filtered: Vec<&Row> = rows
                 .iter()
@@ -100,14 +100,14 @@ fn execute_join(
     left_table: &str,
     jc: &JoinClause,
     where_clause: &Option<Expr>,
-    storage: &mut Storage,
+    session: &mut Session,
 ) -> ExecuteResult {
     // Fetch both tables.
-    let (left_hdrs, left_rows) = match storage.select_all(left_table) {
+    let (left_hdrs, left_rows) = match session.select_all(left_table) {
         Ok(r) => r,
         Err(e) => return ExecuteResult::Message(format!("Error: {}", e)),
     };
-    let (right_hdrs, right_rows) = match storage.select_all(&jc.right_table) {
+    let (right_hdrs, right_rows) = match session.select_all(&jc.right_table) {
         Ok(r) => r,
         Err(e) => return ExecuteResult::Message(format!("Error: {}", e)),
     };
